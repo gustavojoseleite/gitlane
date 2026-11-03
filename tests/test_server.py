@@ -113,3 +113,85 @@ def test_partial_status_clean(make_repo):
     c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
     c.get(f"/?token={TOKEN}")
     assert "Working tree clean" in c.get("/partials/status").text
+
+
+# --- milestone 2: actions ---------------------------------------------------
+
+def test_actions_require_cookie(anon):
+    for path in ("/actions/stage", "/actions/unstage", "/actions/commit",
+                 "/actions/discard", "/actions/stage-all", "/actions/unstage-all"):
+        assert anon.post(path, data={"path": "README.md"}).status_code == 403
+
+
+def test_actions_reject_get(client):
+    assert client.get("/actions/stage-all").status_code == 405
+
+
+def test_cross_origin_post_rejected(client):
+    r = client.post("/actions/stage-all", headers={"origin": "http://evil.com"})
+    assert r.status_code == 403
+    assert client.get("/api/status").json()["staged"] == []
+
+
+def test_same_origin_post_allowed(client):
+    r = client.post("/actions/stage-all", headers={"origin": BASE})
+    assert r.status_code == 200
+
+
+def test_stage_then_commit_flow(client, repo_path):
+    r = client.post("/actions/stage", data={"path": "README.md"})
+    assert r.status_code == 200
+    assert "gitlane:changed" in r.headers["hx-trigger"]
+    assert [f["path"] for f in client.get("/api/status").json()["staged"]] == ["README.md"]
+
+    r = client.post("/actions/commit", data={"message": "Change readme"})
+    assert "Committed" in r.text
+    assert "gitlane:committed" in r.headers["hx-trigger"]
+    data = client.get("/api/status").json()
+    assert data["head_summary"] == "Change readme" and data["staged"] == []
+
+
+def test_commit_error_shown_in_banner(client):
+    r = client.post("/actions/commit", data={"message": "nothing staged"})
+    assert r.status_code == 200
+    assert 'class="banner error"' in r.text and "Nothing staged" in r.text
+    assert "gitlane:committed" not in r.headers.get("hx-trigger", "")
+
+
+def test_unstage_rename_sends_both_paths(client, repo_path):
+    from .conftest import run
+    run(repo_path, "checkout", "--", "README.md")
+    run(repo_path, "mv", "README.md", "renamed.md")
+    html = client.get("/partials/status").text
+    assert "orig" in html  # the unstage button carries the original path
+    client.post("/actions/unstage", data={"path": "renamed.md", "orig": "README.md"})
+    assert client.get("/api/status").json()["staged"] == []
+
+
+def test_discard_has_confirm_and_works(client, repo_path):
+    html = client.get("/partials/status").text
+    assert "hx-confirm" in html
+    client.post("/actions/discard", data={"path": "README.md"})
+    assert (repo_path / "README.md").read_text() == "hello\n"
+
+
+def test_discard_requires_exactly_one_path(client):
+    r = client.post("/actions/discard", data={"path": ["README.md", "<script>.txt"]})
+    assert "one file at a time" in r.text
+
+
+def test_bad_path_shows_error(client):
+    r = client.post("/actions/stage", data={"path": "../../etc/passwd"})
+    assert "outside the repository" in r.text
+
+
+def test_diff_partial_escapes_html(client):
+    html = client.get("/partials/diff", params={"path": "README.md"}).text
+    assert "&lt;b&gt;bold&lt;/b&gt;" in html
+    assert "<b>" not in html
+    assert 'class="add"' in html and 'class="del"' in html
+
+
+def test_diff_partial_bad_path(client):
+    html = client.get("/partials/diff", params={"path": "/etc/passwd"}).text
+    assert 'class="error"' in html

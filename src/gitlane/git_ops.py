@@ -1,10 +1,9 @@
-"""All Git operations used by gitlane.
-
-Read-only in milestone 1: finding the repository and reading its status.
-"""
+"""All Git operations used by gitlane."""
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +25,9 @@ def open_repo(path: str | Path) -> git.Repo:
         raise NotAGitRepo(f"Not a Git repository: {path}") from None
     if repo.bare:
         raise NotAGitRepo(f"Bare repositories are not supported: {path}")
+    # Treat every path we pass as a literal file name, never as a pattern:
+    # a file called "*" must not mean "all files".
+    repo.git.update_environment(GIT_LITERAL_PATHSPECS="1")
     return repo
 
 
@@ -136,3 +138,169 @@ def _add_change(status: RepoStatus, xy: str, path: str, orig: str | None = None)
         status.staged.append(FileChange(path, _CODES.get(x, x), orig if x in "RC" else None))
     if y != ".":
         status.unstaged.append(FileChange(path, _CODES.get(y, y)))
+
+
+# --- Changes (milestone 2) ------------------------------------------------
+
+class GitError(Exception):
+    """A Git operation failed; the message is safe to show to the user."""
+
+
+MAX_DIFF_LINES = 3000
+
+
+def check_paths(paths: list[str]) -> list[str]:
+    """Reject anything that is not a plain relative path inside the repo."""
+    if not paths:
+        raise GitError("No file selected.")
+    clean = []
+    for p in paths:
+        if not p or "\0" in p:
+            raise GitError("Invalid file name.")
+        norm = os.path.normpath(p)
+        if os.path.isabs(p) or norm == ".." or norm.startswith(".." + os.sep):
+            raise GitError(f"Path is outside the repository: {p}")
+        clean.append(p)
+    return clean
+
+
+def _has_head(repo: git.Repo) -> bool:
+    try:
+        repo.head.commit
+        return True
+    except ValueError:
+        return False
+
+
+def _run(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except git.GitCommandError as e:
+        msg = (e.stderr or e.stdout or str(e)).strip()
+        msg = msg.removeprefix("stderr:").strip().strip("'").strip()
+        raise GitError(msg or "Git command failed.") from None
+
+
+def stage(repo: git.Repo, paths: list[str]) -> None:
+    """Stage whole files (also stages deletions)."""
+    _run(repo.git.add, "--all", "--", *check_paths(paths))
+
+
+def stage_all(repo: git.Repo) -> None:
+    _run(repo.git.add, "--all")
+
+
+def unstage(repo: git.Repo, paths: list[str]) -> None:
+    paths = check_paths(paths)
+    if _has_head(repo):
+        _run(repo.git.restore, "--staged", "--", *paths)
+    else:  # no commits yet: there is nothing to restore from
+        _run(repo.git.rm, "--cached", "-q", "-r", "--", *paths)
+
+
+def unstage_all(repo: git.Repo) -> None:
+    if _has_head(repo):
+        _run(repo.git.reset, "-q")
+    else:
+        _run(repo.git.rm, "--cached", "-q", "-r", "--ignore-unmatch", ".")
+
+
+def discard(repo: git.Repo, path: str) -> None:
+    """Throw away unstaged changes to one file. Untracked files are deleted.
+
+    Staged changes are kept: the file goes back to its staged version.
+    """
+    (path,) = check_paths([path])
+    if path in repo.untracked_files:
+        _run(repo.git.clean, "-f", "-q", "--", path)
+    else:
+        _run(repo.git.restore, "--worktree", "--", path)
+
+
+def commit(repo: git.Repo, message: str) -> str:
+    """Commit the staged changes; returns the new commit's short hash."""
+    message = message.strip()
+    if not message:
+        raise GitError("Write a commit message first.")
+    code, _, _ = repo.git.diff("--cached", "--quiet", with_extended_output=True, with_exceptions=False)
+    if code == 0:
+        raise GitError("Nothing staged to commit. Stage some files first.")
+    _run(repo.git.commit, "-q", "--cleanup=strip", "-m", message)
+    return repo.head.commit.hexsha[:7]
+
+
+@dataclass
+class DiffLine:
+    kind: str  # "add", "del", "ctx", "hunk", "meta"
+    text: str
+    old: int | None = None
+    new: int | None = None
+
+
+@dataclass
+class FileDiff:
+    path: str
+    staged: bool
+    lines: list[DiffLine] = field(default_factory=list)
+    binary: bool = False
+    truncated: bool = False
+
+    @property
+    def empty(self) -> bool:
+        return not self.binary and not any(l.kind in ("add", "del") for l in self.lines)
+
+
+def diff_file(repo: git.Repo, path: str, staged: bool = False) -> FileDiff:
+    """Unified diff of one file: staged (index vs HEAD) or unstaged (worktree vs index).
+
+    Untracked files are shown as entirely added.
+    """
+    (path,) = check_paths([path])
+    opts = ["--no-color", "--no-ext-diff", "--no-textconv"]
+    if not staged and path in repo.untracked_files:
+        raw = repo.git.diff(*opts, "--no-index", "--", os.devnull, path,
+                            with_exceptions=False, stdout_as_string=False)
+    elif staged:
+        raw = _run(repo.git.diff, *opts, "--cached", "--", path, stdout_as_string=False)
+    else:
+        raw = _run(repo.git.diff, *opts, "--", path, stdout_as_string=False)
+    return parse_diff(raw.decode("utf-8", errors="replace"), path, staged)
+
+
+_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def parse_diff(text: str, path: str, staged: bool) -> FileDiff:
+    result = FileDiff(path=path, staged=staged)
+    old = new = 0
+    in_hunk = False
+    for line in text.splitlines():
+        if len(result.lines) >= MAX_DIFF_LINES:
+            result.truncated = True
+            break
+        m = _HUNK.match(line)
+        if m:
+            old, new = int(m.group(1)), int(m.group(2))
+            in_hunk = True
+            result.lines.append(DiffLine("hunk", line))
+        elif not in_hunk:
+            if line.startswith("Binary files") or line == "GIT binary patch":
+                result.binary = True
+            # File headers (diff --git, index, ---/+++) are not shown.
+        elif line.startswith("+"):
+            result.lines.append(DiffLine("add", line[1:], new=new))
+            new += 1
+        elif line.startswith("-"):
+            result.lines.append(DiffLine("del", line[1:], old=old))
+            old += 1
+        elif line.startswith(" ") or line == "":
+            result.lines.append(DiffLine("ctx", line[1:], old=old, new=new))
+            old += 1
+            new += 1
+        elif line.startswith("\\"):
+            result.lines.append(DiffLine("meta", line[2:]))
+        else:  # next file header (should not happen for a single path)
+            in_hunk = False
+            if line.startswith("Binary files"):
+                result.binary = True
+    return result

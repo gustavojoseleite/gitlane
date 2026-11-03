@@ -10,26 +10,75 @@
 <body>
   <header>
     <span class="logo">gitlane</span>
-    <button id="refresh" type="button"
-            hx-get="/partials/status" hx-target="#status" title="Refresh (R)">Refresh</button>
+    <button id="refresh" type="button" title="Refresh (R)">Refresh</button>
   </header>
-  <main id="status"
-        hx-get="/partials/status"
-        hx-trigger="load, focus from:window">
-    <p class="muted">Loading…</p>
-  </main>
+  <div class="layout">
+    <aside class="sidebar">
+      <div id="status"
+           hx-get="/partials/status"
+           hx-trigger="load, focus from:window, gitlane:refresh from:body">
+        <p class="muted">Loading…</p>
+      </div>
+      <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status">
+        <label for="message">Commit message</label>
+        <textarea id="message" name="message" rows="4"
+                  placeholder="Summary of the change&#10;&#10;Optional longer description"></textarea>
+        <button type="submit" class="primary">Commit staged changes</button>
+        <span class="hint">Ctrl+Enter</span>
+      </form>
+    </aside>
+    <main id="diff" class="diff-panel">
+      <p class="muted">Click a file to see its changes.</p>
+    </main>
+  </div>
   <script>
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey &&
-          !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
-        document.getElementById("refresh").click();
-      }
-    });
-    document.body.addEventListener("htmx:responseError", (e) => {
-      document.getElementById("status").innerHTML =
-        '<p class="error">Could not load status (HTTP ' + e.detail.xhr.status +
-        '). If gitlane was restarted, open the new link from your terminal.</p>';
-    });
+    (() => {
+      const diff = document.getElementById("diff");
+      const message = document.getElementById("message");
+      let currentDiff = null;
+
+      const refresh = () => {
+        htmx.trigger(document.body, "gitlane:refresh");
+        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
+      };
+      document.getElementById("refresh").addEventListener("click", refresh);
+      window.addEventListener("focus", () => {
+        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
+      });
+
+      // Remember which diff is open so it can be reloaded after actions.
+      document.body.addEventListener("htmx:beforeRequest", (e) => {
+        if (e.detail.target === diff) {
+          currentDiff = e.detail.requestConfig.path;
+        }
+      });
+      document.body.addEventListener("gitlane:changed", () => {
+        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
+      });
+      document.body.addEventListener("gitlane:committed", () => {
+        message.value = "";
+        currentDiff = null;
+        diff.innerHTML = '<p class="muted">Click a file to see its changes.</p>';
+      });
+
+      message.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          document.getElementById("commit-form").requestSubmit();
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey &&
+            !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+          refresh();
+        }
+      });
+      document.body.addEventListener("htmx:responseError", (e) => {
+        e.detail.target.innerHTML =
+          '<p class="error">Request failed (HTTP ' + e.detail.xhr.status +
+          '). If gitlane was restarted, open the new link from your terminal.</p>';
+      });
+    })();
   </script>
 </body>
 </html>
