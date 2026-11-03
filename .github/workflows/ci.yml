@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    # Windows hasn't been verified yet; its failures are reported but don't block.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  browser:
+    name: Browser tests (Chrome)
+    runs-on: ubuntu-latest  # Google Chrome is preinstalled on GitHub's Ubuntu runners
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev,e2e]"
+      - run: python -m pytest -q tests/test_e2e.py
+
+  package:
+    name: Build and test the installed package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install build
+      - run: python -m build
+      - name: Install the wheel in a clean environment and test it (not the source folder)
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl pytest httpx
+          /tmp/clean/bin/gitlane --version
+          cp -r tests /tmp/tests && cd /tmp && /tmp/clean/bin/python -m pytest -q -p no:cacheprovider tests

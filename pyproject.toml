@@ -10,6 +10,17 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Gustavo Leite" }]
+keywords = ["git", "git-client", "gui", "commit-graph", "browser", "version-control"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Version Control :: Git",
+]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -20,6 +31,11 @@ dependencies = [
 dev = ["pytest>=8", "httpx>=0.27"]
 # Browser tests (tests/test_e2e.py) use your installed Chrome; skipped if missing.
 e2e = ["playwright>=1.40"]
+
+[project.urls]
+Homepage = "https://github.com/gustavojoseleite/gitlane"
+Issues = "https://github.com/gustavojoseleite/gitlane/issues"
+Changelog = "https://github.com/gustavojoseleite/gitlane/blob/main/CHANGELOG.md"
 
 [project.scripts]
 gitlane = "gitlane.cli:main"

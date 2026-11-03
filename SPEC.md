@@ -90,6 +90,9 @@ Build in this order. Each milestone is **done only when its tests pass and the o
 6. **Stash** — save/list/apply/pop/drop.
 7. **Repos & tabs** — several repos in tabs, repo picker (recent / folder browser / paste path), remembered tabs, toolbar under the tabs (§4).
 8. **Polish & release** — README with screenshots, packaging, publish to PyPI.
+   *Done locally:* install docs (pipx / uv / uvx), Git checks at startup, `--install-launcher`,
+   CI on Linux/macOS/Windows, release workflow with Trusted Publishing, CONTRIBUTING and CHANGELOG.
+   *Waiting for the owner's OK:* creating the public GitHub repo and the first PyPI release.
 
 ## 6. Testing rules
 

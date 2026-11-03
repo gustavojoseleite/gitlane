@@ -605,3 +605,9 @@ def test_long_lists_start_minimized(make_repo):
     assert 'data-section="unstaged" data-auto-collapse="0"' in html  # changes are never auto-hidden
     assert 'data-section="branches" data-auto-collapse="0"' in html
     assert html.count('class="sec-toggle"') == 3
+
+
+def test_favicon_served(client):
+    r = client.get("/static/gitlane.svg")
+    assert r.status_code == 200 and r.text.startswith("<svg")
+    assert 'rel="icon"' in client.get("/").text
