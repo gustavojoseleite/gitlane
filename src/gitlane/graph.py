@@ -45,6 +45,7 @@ class Commit:
     timestamp: int
     refs: list[Ref]
     subject: str
+    stash: int | None = None  # stash@{N} position for stash rows, else None
 
     @property
     def date(self) -> str:
@@ -107,6 +108,46 @@ def read_commits(repo: git.Repo, limit: int) -> list[Commit]:
             timestamp=int(ts), refs=parse_refs(deco, remotes), subject=subject,
         ))
     return commits
+
+
+def read_stashes(repo: git.Repo) -> list[Commit]:
+    """Stashes as graph rows whose only parent is the commit they were made on."""
+    from .stash import Stash  # stash imports this module
+
+    code, out, _ = repo.git.stash(
+        "list", f"--format={_FIELD.join(['%H', '%P', '%gs', '%ct', '%an', '%ae'])}",
+        with_extended_output=True, with_exceptions=False,
+    )
+    if code != 0:
+        return []
+    rows = []
+    for i, line in enumerate(out.splitlines()):
+        sha, parents, message, ts, author, email = line.split(_FIELD, 5)
+        st = Stash(index=i, sha=sha, message=message, timestamp=int(ts))
+        rows.append(Commit(
+            sha=sha, parents=parents.split()[:1], author=author, email=email, timestamp=int(ts),
+            refs=[Ref("stash", st.ref)], subject=st.title, stash=i,
+        ))
+    return rows
+
+
+def insert_stashes(commits: list[Commit], stashes: list[Commit]) -> list[Commit]:
+    """Put each stash right above its base commit (newest stash first).
+
+    Stashes whose base isn't in ``commits`` are left out; they show up once
+    the page containing their base is loaded.
+    """
+    by_base: dict[str, list[Commit]] = {}
+    for st in stashes:
+        if st.parents:
+            by_base.setdefault(st.parents[0], []).append(st)
+    if not by_base:
+        return commits
+    out = []
+    for c in commits:
+        out.extend(by_base.get(c.sha, ()))
+        out.append(c)
+    return out
 
 
 # --- layout -----------------------------------------------------------------
@@ -190,7 +231,7 @@ def graph_page(repo: git.Repo, skip: int = 0, limit: int = PAGE_SIZE) -> GraphPa
     time; this stays fast for repositories with tens of thousands of commits.
     """
     skip = max(0, skip)
-    commits = read_commits(repo, skip + limit + 1)
+    commits = insert_stashes(read_commits(repo, skip + limit + 1), read_stashes(repo))
     rows = layout(commits[: skip + limit])
     return GraphPage(rows=rows[skip:], skip=skip, has_more=len(commits) > skip + limit)
 
@@ -199,7 +240,9 @@ def refs_version(repo: git.Repo) -> str:
     """Changes whenever any branch, tag or HEAD moves (used to refresh the graph)."""
     _, refs, _ = repo.git.show_ref("--head", with_extended_output=True, with_exceptions=False)
     _, head, _ = repo.git.symbolic_ref("-q", "HEAD", with_extended_output=True, with_exceptions=False)
-    return hashlib.sha1(f"{head}\n{refs}".encode()).hexdigest()
+    _, stashes, _ = repo.git.stash("list", "--format=%H", with_extended_output=True,
+                                   with_exceptions=False)  # dropping stash@{1} keeps refs/stash
+    return hashlib.sha1(f"{head}\n{refs}\n{stashes}".encode()).hexdigest()
 
 
 # --- commit details ---------------------------------------------------------

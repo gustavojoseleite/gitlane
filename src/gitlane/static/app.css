@@ -101,9 +101,19 @@ li .file {
   background: none; overflow-wrap: anywhere;
 }
 li .file[hx-get]:hover { color: var(--accent); text-decoration: underline; }
-li .actions { display: flex; gap: 4px; visibility: hidden; }
+/* Row buttons are small icons that keep their place (no overlap, no mis-clicks)
+   and only become visible on hover/focus. */
+li .actions { display: flex; flex: none; gap: 2px; visibility: hidden; }
+li:hover, li:focus-within { background: var(--panel); }
 li:hover .actions, li:focus-within .actions { visibility: visible; }
 @media (hover: none) { li .actions { visibility: visible; } }
+.icon-btn {
+  display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0;
+  border-radius: 5px; color: var(--muted); background: transparent; border-color: transparent;
+}
+.icon-btn:hover { color: var(--fg); background: var(--bg); border-color: var(--border); }
+.icon-btn.danger:hover { color: var(--red); border-color: var(--red); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 button.small { font-size: 12px; padding: 1px 8px; }
 button.danger:hover { border-color: var(--red); color: var(--red); }
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -136,8 +146,8 @@ table.diff tr.hunk td { background: var(--panel); color: var(--muted); padding: 
 table.diff tr.meta td { color: var(--muted); font-style: italic; }
 li:first-child { border-top: 0; }
 .tag {
-  flex: none; min-width: 72px; font-size: 11px; text-transform: uppercase;
-  letter-spacing: .03em; color: var(--muted);
+  flex: none; width: 18px; text-align: center; font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); cursor: default;
 }
 .tag.added, .tag.untracked { color: var(--green); }
 .tag.modified, .tag.renamed, .tag.copied, .tag.type-changed { color: var(--yellow); }
@@ -192,9 +202,12 @@ li:first-child { border-top: 0; }
 .ref-branch { border-color: var(--accent); color: var(--accent); }
 .ref-remote { color: var(--muted); }
 .ref-tag { border-color: var(--yellow); color: var(--yellow); }
+.ref-stash { border-style: dashed; border-color: var(--muted); color: var(--muted); }
+.stash-row .subject { font-style: italic; color: var(--muted); }
 svg line, svg path { stroke-width: 2; fill: none; }
 svg circle { stroke-width: 2; }
 svg circle.merge { fill: var(--bg) !important; }
+svg circle.stash-dot { fill: var(--bg) !important; stroke-width: 2; stroke-dasharray: 2.5 2; }
 svg .head-ring { fill: none; stroke: var(--fg); stroke-width: 1.5; }
 :root { --c0:#0969da; --c1:#1a7f37; --c2:#bf3989; --c3:#9a6700; --c4:#8250df; --c5:#cf222e; --c6:#1b7c83; --c7:#bc4c00; }
 @media (prefers-color-scheme: dark) { :root { --c0:#4493f8; --c1:#3fb950; --c2:#db61a2; --c3:#d29922; --c4:#a371f7; --c5:#f85149; --c6:#39c5cf; --c7:#f0883e; } }
@@ -269,3 +282,12 @@ button.danger { color: var(--red); }
 
 .commit-detail .ref { max-width: none; white-space: normal; overflow-wrap: anywhere; }
 .branch-item > .muted { flex: none; font-size: 12px; }
+
+.stash-item { flex-direction: column; align-items: stretch; gap: 0; padding: 4px 6px 4px 10px; }
+.stash-item .file { padding: 0; }
+.stash-meta-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 6px; min-height: 22px; }
+.stash-meta-row .actions { margin-left: auto; }
+.stash-title { overflow-wrap: anywhere; }
+.stash-meta { font-size: 12px; }
+.stash-detail .op-buttons { margin: 8px 0 4px; }
+.stash-meta { white-space: nowrap; }

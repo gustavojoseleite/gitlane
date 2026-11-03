@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, blobs, branches, git_ops, graph
+from . import __version__, blobs, branches, git_ops, graph, stash
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 
 COOKIE_NAME = "gitlane_token"
@@ -72,7 +72,8 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
                         action: dict | None = None) -> HTMLResponse:
         def build(repo):
             return render_status(get_status(repo), error=error, notice=notice, hint=hint,
-                                 action=action, branch_lists=branches.list_branches(repo))
+                                 action=action, branch_lists=branches.list_branches(repo),
+                                 stashes=stash.list_stashes(repo))
         html = with_repo(build)
         headers = {"HX-Trigger": ", ".join(events)} if events else {}
         return HTMLResponse(html, headers=headers)
@@ -281,6 +282,43 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     async def action_continue() -> HTMLResponse:
         return await run_action(branches.continue_operation, notice=lambda m: m)
 
+    # --- stash (milestone 6) --------------------------------------------------
+
+    @app.post("/actions/stash/save", response_class=HTMLResponse)
+    async def action_stash_save(request: Request) -> HTMLResponse:
+        return await run_action(stash.save, await field(request, "message"), notice=lambda m: m)
+
+    def stash_action(fn):
+        async def handler(request: Request) -> HTMLResponse:
+            form = await _form(request)
+            return await run_action(fn, form.get("index", [""])[0], form.get("sha", [""])[0],
+                                    notice=lambda m: m)
+        return handler
+
+    app.post("/actions/stash/apply", response_class=HTMLResponse)(stash_action(stash.apply))
+    app.post("/actions/stash/pop", response_class=HTMLResponse)(stash_action(stash.pop))
+    app.post("/actions/stash/drop", response_class=HTMLResponse)(stash_action(stash.drop))
+
+    @app.get("/partials/stash", response_class=HTMLResponse)
+    def partial_stash(index: int, sha: str) -> str:
+        try:
+            return render_stash(with_repo(stash.detail, index, sha))
+        except GitError as e:
+            return f'<p class="error">{escape(str(e))}</p>'
+
+    @app.get("/partials/stash-diff", response_class=HTMLResponse)
+    def partial_stash_diff(index: int, sha: str, path: str) -> str:
+        try:
+            diff = with_repo(stash.file_diff, index, sha, path)
+            images = None
+            if blobs.image_type(path):
+                before, after = with_repo(stash.versions, sha, path)
+                images = (blob_url(before, path) if before else None,
+                          blob_url(after, path) if after else None)
+        except GitError as e:
+            return f'<p class="error">{escape(str(e))}</p>'
+        return render_diff(diff, where=f"stash@{{{index}}}", images=images)
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
 
@@ -315,19 +353,51 @@ def _attr(value) -> str:
     return escape(value if isinstance(value, str) else json.dumps(value), quote=True)
 
 
+_ICONS = {  # 24x24 stroke icons (drawn with currentColor)
+    "plus": '<path d="M12 5v14M5 12h14"/>',
+    "minus": '<path d="M5 12h14"/>',
+    "undo": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+    "trash": '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+    "merge": '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+}
+
+
+def _icon(name: str) -> str:
+    return (f'<svg class="icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" '
+            f'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" '
+            f'stroke-linejoin="round">{_ICONS[name]}</svg>')
+
+
 def _post(url: str, vals: dict | None = None, confirm: str | None = None,
-          label: str = "", css: str = "") -> str:
+          label: str = "", css: str = "", icon: str | None = None) -> str:
     attrs = f'hx-post="{url}" hx-target="#status"'
     if vals:
         attrs += f' hx-vals="{_attr(vals)}"'
     if confirm:
         attrs += f' hx-confirm="{_attr(confirm)}"'
+    if icon:  # compact button: the label becomes the tooltip and accessible name
+        return (f'<button type="button" class="icon-btn {css}" title="{_attr(label)}" '
+                f'aria-label="{_attr(label)}" {attrs}>{_icon(icon)}</button>')
     return f'<button type="button" class="{css}" {attrs}>{escape(label)}</button>'
+
+
+_STATUS_LETTERS = {
+    "modified": "M", "added": "A", "deleted": "D", "renamed": "R", "copied": "C",
+    "type changed": "T", "untracked": "U", "conflict": "!",
+}
+
+
+def _status_badge(status: str) -> str:
+    """One-letter status (M, A, D…) with the full word as tooltip."""
+    letter = _STATUS_LETTERS.get(status, status[:1].upper())
+    return (f'<span class="tag {escape(status.replace(" ", "-"))}" title="{_attr(status)}">'
+            f'{escape(letter)}<span class="sr-only"> {escape(status)}</span></span>')
 
 
 def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None,
                   hint: str | None = None, action: dict | None = None,
-                  branch_lists: tuple[list, list[str]] | None = None) -> str:
+                  branch_lists: tuple[list, list[str]] | None = None,
+                  stashes: list | None = None) -> str:
     if s.branch:
         head = f'<span class="branch">{escape(s.branch)}</span>'
     elif s.detached:
@@ -368,9 +438,43 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
             _file_list("Changes", s.unstaged, "unstaged"),
             _file_list("Untracked", s.untracked, "untracked"),
         ]
+    if stashes is not None:
+        parts.append(_stash_list(s, stashes))
     if branch_lists is not None:
         parts.append(_branch_lists(s, *branch_lists))
     return "\n".join(p for p in parts if p)
+
+
+def _stash_list(s: RepoStatus, stashes: list) -> str:
+    has_changes = bool(s.staged or s.unstaged or s.untracked)
+    btn = ""
+    if has_changes and not s.conflicted:
+        btn = _prompt_button("/actions/stash/save", "message", "Stash changes",
+                             "Stash all your changes (including untracked files).\n\n"
+                             "Optional message to remember what this is:")
+    if not stashes:
+        return (f'<section class="files stashes"><h2>Stashes <span class="count">0</span>{btn}</h2></section>'
+                if btn else "")
+    items = []
+    for st in stashes:
+        vals = {"index": str(st.index), "sha": st.sha}
+        actions = (
+            _post("/actions/stash/apply", vals, label="Apply", css="small")
+            + _post("/actions/stash/pop", vals, label="Pop", css="small")
+            + _post("/actions/stash/drop", vals, label="Drop", css="small danger",
+                    confirm=f"Delete {st.ref} ({st.title})?\n\nIts changes will be lost.")
+        )
+        where = f"on {escape(st.branch)} · " if st.branch else ""
+        url = f"/partials/stash?index={st.index}&sha={st.sha}"
+        items.append(
+            f'<li class="stash-item"><button type="button" class="file" title="{_attr(st.message)}" '
+            f'hx-get="{_attr(url)}" hx-target="#detail">'
+            f'<span class="stash-title">{escape(st.title)}</span></button>'
+            f'<span class="stash-meta-row"><span class="muted stash-meta">{where}{st.date}</span>'
+            f'<span class="actions">{actions}</span></span></li>'
+        )
+    return (f'<section class="files stashes"><h2>Stashes <span class="count">{len(stashes)}</span>{btn}</h2>'
+            f'<ul>{"".join(items)}</ul></section>')
 
 
 def _operation_box(s: RepoStatus) -> str:
@@ -406,10 +510,10 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             continue
         actions = ""
         if s.branch:
-            actions += _post("/actions/branch/merge", {"name": b.name}, label="Merge", css="small",
-                             confirm=f"Merge {b.name} into {s.branch}?")
-        actions += _post("/actions/branch/delete", {"name": b.name}, label="Delete", css="small danger",
-                         confirm=f"Delete the branch {b.name}?")
+            actions += _post("/actions/branch/merge", {"name": b.name}, label=f"Merge into {s.branch}",
+                             icon="merge", confirm=f"Merge {b.name} into {s.branch}?")
+        actions += _post("/actions/branch/delete", {"name": b.name}, label="Delete branch",
+                         css="danger", icon="trash", confirm=f"Delete the branch {b.name}?")
         items.append(
             f'<li class="branch-item" data-ref-kind="branch" data-ref-name="{_attr(b.name)}">'
             f'<button type="button" class="file" title="Switch to {_attr(b.name)}" '
@@ -503,24 +607,24 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
         actions = ""
         if kind == "staged":
             vals = {"path": f.path, **({"orig": f.orig_path} if f.orig_path else {})}
-            actions = _post("/actions/unstage", vals, label="Unstage", css="small")
+            actions = _post("/actions/unstage", vals, label="Unstage", icon="minus")
         elif kind == "unstaged":
             actions = (
                 _post("/actions/discard", {"path": f.path},
                       confirm=f"Discard your changes to {f.path}?\n\nThis cannot be undone.",
-                      label="Discard", css="small danger")
-                + _post("/actions/stage", {"path": f.path}, label="Stage", css="small")
+                      label="Discard changes", css="danger", icon="undo")
+                + _post("/actions/stage", {"path": f.path}, label="Stage", icon="plus")
             )
         elif kind == "untracked":
             actions = (
                 _post("/actions/discard", {"path": f.path},
                       confirm=f"Delete the untracked file {f.path}?\n\nThis cannot be undone.",
-                      label="Delete", css="small danger")
-                + _post("/actions/stage", {"path": f.path}, label="Stage", css="small")
+                      label="Delete file", css="danger", icon="trash")
+                + _post("/actions/stage", {"path": f.path}, label="Stage", icon="plus")
             )
         file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#detail"'
         items.append(
-            f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
+            f'<li>{_status_badge(f.status)}'
             f'<button type="button" class="file" title="{_attr(f.path)}"{file_btn}>{name}</button>'
             f'<span class="actions">{actions}</span></li>'
         )
@@ -599,7 +703,9 @@ def render_row_svg(row: graph.Row) -> str:
     parts += [_segment(a, b, c, half, ROW_H) for a, b, c in row.bottom]
     cx, cls = _x(row.col), f"n{row.color % N_COLORS}"
     is_head = any(r.kind in ("head", "detached") for r in row.commit.refs)
-    if len(row.commit.parents) > 1:
+    if row.commit.stash is not None:
+        parts.append(f'<circle class="{cls} stash-dot" cx="{cx}" cy="{half}" r="5"/>')
+    elif len(row.commit.parents) > 1:
         parts.append(f'<circle class="{cls} merge" cx="{cx}" cy="{half}" r="3.5"/>')
     else:
         parts.append(f'<circle class="{cls}" cx="{cx}" cy="{half}" r="4.5"/>')
@@ -614,7 +720,7 @@ def render_refs(refs: list[graph.Ref]) -> str:
     labels = {
         "head": ("ref ref-head", "●&nbsp;"), "branch": ("ref ref-branch", ""),
         "remote": ("ref ref-remote", ""), "tag": ("ref ref-tag", "🏷&nbsp;"),
-        "detached": ("ref ref-head", "HEAD"),
+        "detached": ("ref ref-head", "HEAD"), "stash": ("ref ref-stash", ""),
     }
     out = []
     for r in refs:
@@ -631,10 +737,16 @@ def render_graph_page(page: graph.GraphPage) -> str:
     rows = []
     for row in page.rows:
         c = row.commit
+        if c.stash is not None:
+            attrs = f'class="row stash-row" data-stash-index="{c.stash}"'
+            subject = f'<span class="subject" title="Stashed changes">{escape(c.subject)}</span>'
+        else:
+            attrs = f'class="row" data-merge="{1 if len(c.parents) > 1 else 0}"'
+            subject = f'<span class="subject">{escape(c.subject)}</span>'
         rows.append(
-            f'<div class="row" data-sha="{c.sha}" data-merge="{1 if len(c.parents) > 1 else 0}" tabindex="0">'
+            f'<div {attrs} data-sha="{c.sha}" tabindex="0">'
             f'<div class="g">{render_row_svg(row)}</div>'
-            f'<div class="msg">{render_refs(c.refs)}<span class="subject">{escape(c.subject)}</span></div>'
+            f'<div class="msg">{render_refs(c.refs)}{subject}</div>'
             f'<div class="author" title="{_attr(c.email)}">{escape(c.author)}</div>'
             f'<div class="date">{c.date}</div>'
             f'<div class="sha"><code>{c.sha[:7]}</code></div>'
@@ -661,7 +773,7 @@ def render_commit(d: graph.CommitDetail) -> str:
             params += f"&orig={quote(f.orig_path, safe='')}"
         name = _wrap(f.path) if not f.orig_path else f"{_wrap(f.orig_path)} → {_wrap(f.path)}"
         files.append(
-            f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
+            f'<li>{_status_badge(f.status)}'
             f'<button type="button" class="file" title="{_attr(f.path)}" hx-get="{_attr("/partials/commit-diff?" + params)}" '
             f'hx-target="#commit-diff">{name}</button></li>'
         )
@@ -681,6 +793,39 @@ def render_commit(d: graph.CommitDetail) -> str:
         f'<dt>Parents</dt><dd>{parents}</dd>'
         '</dl>'
         f'<h3>Files changed <span class="count">{len(d.files)}</span></h3>{note}{files_html}'
+        '<div id="commit-diff"></div>'
+        '</article>'
+    )
+
+
+def render_stash(d) -> str:
+    st = d.stash
+    files = []
+    for f in d.files:
+        url = f"/partials/stash-diff?index={st.index}&sha={st.sha}&path={quote(f.path, safe='')}"
+        name = _wrap(f.path) if not f.orig_path else f"{_wrap(f.orig_path)} → {_wrap(f.path)}"
+        files.append(
+            f'<li>{_status_badge(f.status)}'
+            f'<button type="button" class="file" title="{_attr(f.path)}" hx-get="{_attr(url)}" '
+            f'hx-target="#commit-diff">{name}</button></li>'
+        )
+    vals = {"index": str(st.index), "sha": st.sha}
+    buttons = (
+        _post("/actions/stash/apply", vals, label="Apply", css="")
+        + _post("/actions/stash/pop", vals, label="Pop (apply and delete)", css="primary")
+        + _post("/actions/stash/drop", vals, label="Drop", css="danger",
+                confirm=f"Delete {st.ref} ({st.title})?\n\nIts changes will be lost.")
+    )
+    files_html = f'<ul>{"".join(files)}</ul>' if files else '<p class="muted">No changes.</p>'
+    branch = f'<dt>Branch</dt><dd>{escape(st.branch)}</dd>' if st.branch else ""
+    return (
+        '<article class="commit-detail stash-detail">'
+        f'<div class="refs"><span class="ref ref-stash">{escape(st.ref)}</span></div>'
+        f'<h2 class="subject">{escape(st.title)}</h2>'
+        f'<dl><dt>Created</dt><dd>{st.date}</dd>{branch}'
+        f'<dt>Commit</dt><dd><code class="full-sha">{st.sha}</code></dd></dl>'
+        f'<div class="op-buttons">{buttons}</div>'
+        f'<h3>Files <span class="count">{len(d.files)}</span></h3>{files_html}'
         '<div id="commit-diff"></div>'
         '</article>'
     )

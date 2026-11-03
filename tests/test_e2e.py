@@ -301,3 +301,87 @@ def test_new_branch_button_keeps_name_intact(make_repo, open_page):
     page.click("#status button:has-text('New branch')")
     assert "Created branch feature/ação→nova" in notice(page)
     assert run(path, "branch", "--show-current") == "feature/ação→nova"
+
+
+# --- stash --------------------------------------------------------------------
+
+def test_stash_save_view_and_pop(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("work in progress\n")
+    (path / "novo.txt").write_text("untracked")
+    page = open_page(path)
+    accept_dialogs(page, "login pela metade → ação")
+    page.click("#status button:has-text('Stash changes')")
+    assert "Stashed your changes" in notice(page)
+    assert "login pela metade → ação" in page.inner_text("#status .stashes")
+    assert page.locator("#status .clean").count() == 1
+
+    page.click("#status .stash-item button.file")
+    page.wait_for_selector("#detail .stash-detail")
+    page.click("#detail button.file:has-text('novo.txt')")
+    page.wait_for_selector("#commit-diff tr.add")
+
+    page.click("#detail button:has-text('Pop (apply and delete)')")
+    page.wait_for_selector("#status .banner.notice:has-text('Applied and removed')")
+    assert (path / "novo.txt").read_text() == "untracked"
+    assert page.locator("#status .stash-item").count() == 0
+    assert "Stash changes" in page.inner_text("#status .stashes")  # changes are back, can stash again
+    assert "Click a commit" in page.inner_text("#detail")  # stale stash view cleared
+
+
+def test_stash_drop_needs_confirmation(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("x\n")
+    page = open_page(path)
+    answers = iter(["keep me", None])  # prompt answer, then dismiss the confirm
+    page.on("dialog", lambda d: d.accept(next(answers)) if d.type == "prompt" else d.dismiss())
+    page.click("#status button:has-text('Stash changes')")
+    page.wait_for_selector("#status .stash-item")
+    item = page.locator("#status .stash-item")
+    item.hover()
+    item.get_by_role("button", name="Drop").click()
+    page.wait_for_timeout(300)
+    assert "keep me" in run(path, "stash", "list")  # dismissed -> still there
+
+
+def test_stash_in_graph_click_and_menu(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("wip\n")
+    page = open_page(path)
+    accept_dialogs(page, "from the graph")
+    page.click("#status button:has-text('Stash changes')")
+    row = page.wait_for_selector("#graph .row.stash-row")  # graph reloads by itself
+    assert "stash@{0}" in row.inner_text() and "from the graph" in row.inner_text()
+    row.click()
+    page.wait_for_selector("#detail .stash-detail:has-text('from the graph')")
+    page.locator("#graph .row.stash-row").click(button="right")
+    labels = page.locator("#ctx-menu button").all_inner_texts()
+    assert labels == ["Apply (keep the stash)", "Pop (apply and delete)", "Drop stash@{0}…"]
+    page.click("#ctx-menu button:has-text('Pop')")
+    page.wait_for_selector("#status .banner.notice:has-text('Applied and removed')")
+    page.wait_for_selector("#graph .row.stash-row", state="detached")
+    assert (path / "README.md").read_text() == "wip\n"
+
+
+def test_file_names_get_the_row_width(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("changed\n")
+    page = open_page(path)
+    row = page.locator("#status .files.unstaged li").first
+    name = row.locator("button.file")
+    row_w = row.bounding_box()["width"]
+    assert name.bounding_box()["width"] > row_w * 0.55  # names aren't squeezed by hidden buttons
+    assert page.eval_on_selector("#status .files.unstaged button.file",
+                                 "el => el.getBoundingClientRect().height") < 30  # one line
+
+
+def test_row_buttons_never_cover_the_name(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("changed\n")
+    page = open_page(path)
+    row = page.locator("#status .files.unstaged li").first
+    row.hover()
+    name = row.locator("button.file").bounding_box()
+    for b in row.locator(".actions button").all():
+        box = b.bounding_box()
+        assert box["x"] >= name["x"] + name["width"] - 1  # buttons sit after the name

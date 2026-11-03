@@ -491,3 +491,55 @@ def test_graph_rows_have_menu_data(client):
 
 def test_index_has_context_menu(client):
     assert 'id="ctx-menu"' in client.get("/").text
+
+
+# --- milestone 6: stash ---------------------------------------------------------
+
+STASH_ACTIONS = ["/actions/stash/save", "/actions/stash/apply", "/actions/stash/pop", "/actions/stash/drop"]
+
+
+@pytest.mark.parametrize("path", STASH_ACTIONS)
+def test_stash_actions_protected(anon, path):
+    assert anon.post(path).status_code == 403
+
+
+@pytest.mark.parametrize("path", STASH_ACTIONS)
+def test_stash_actions_reject_get(client, path):
+    assert client.get(path).status_code == 405
+
+
+def test_stash_flow_through_server(client, repo_path):
+    html = client.get("/partials/status").text
+    assert "Stash changes" in html and 'data-prompt-url="/actions/stash/save"' in html
+    r = client.post("/actions/stash/save", data={"message": "trabalho em <progresso>"})
+    assert "Stashed your changes" in r.text
+    assert "&lt;progresso&gt;" in r.text and "<progresso>" not in r.text
+    assert "Working tree clean" in r.text and "Stash changes" not in r.text  # nothing left to stash
+    data = client.get("/api/status").json()
+    assert data["clean"]
+
+    from gitlane import stash as stash_mod
+    from gitlane.git_ops import open_repo
+    repo = open_repo(repo_path)
+    [st] = stash_mod.list_stashes(repo)
+    repo.close()
+
+    detail = client.get(f"/partials/stash?index=0&sha={st.sha}").text
+    assert "stash@{0}" in detail and "README.md" in detail and "untracked" in detail
+    diff = client.get("/partials/stash-diff", params={"index": 0, "sha": st.sha, "path": "README.md"}).text
+    assert 'class="add"' in diff and "stash@{0}" in diff
+
+    r = client.post("/actions/stash/pop", data={"index": "0", "sha": st.sha})
+    assert "Applied and removed stash@{0}" in r.text
+    assert client.get("/api/status").json()["clean"] is False
+
+
+def test_stash_drop_has_confirm(client, repo_path):
+    client.post("/actions/stash/save", data={"message": "x"})
+    html = client.get("/partials/status").text
+    assert "/actions/stash/drop" in html and "Its changes will be lost" in html
+
+
+def test_stale_stash_detail(client):
+    html = client.get(f"/partials/stash?index=0&sha={'a' * 40}").text
+    assert 'class="error"' in html and "changed" in html

@@ -89,7 +89,9 @@
         graphEl.querySelectorAll(".row.selected").forEach((r) => r.classList.remove("selected"));
         const row = graphEl.querySelector(`.row[data-sha="${sha}"]`);
         if (row) row.classList.add("selected");
-        htmx.ajax("GET", `/partials/commit?sha=${sha}`, "#detail");
+        const stash = row?.dataset.stashIndex;
+        htmx.ajax("GET", stash !== undefined ? `/partials/stash?index=${stash}&sha=${sha}`
+                                             : `/partials/commit?sha=${sha}`, "#detail");
       };
 
       document.getElementById("refresh").addEventListener("click", refresh);
@@ -237,6 +239,18 @@
         ];
       };
 
+      const stashItems = (index, sha) => {
+        const vals = { index, sha };
+        const ref = `stash@{${index}}`;
+        return [
+          { label: "Apply (keep the stash)", run: () => post("/actions/stash/apply", vals) },
+          { label: "Pop (apply and delete)", run: () => post("/actions/stash/pop", vals) },
+          "-",
+          { label: `Drop ${ref}…`, danger: true,
+            run: () => post("/actions/stash/drop", vals, `Delete ${ref}?\n\nIts changes will be lost.`) },
+        ];
+      };
+
       const refItems = (kind, name, sha) => {
         const branch = currentBranch();
         const mergeItem = {
@@ -275,7 +289,8 @@
         const ref = e.target.closest("[data-ref-kind]");
         const row = e.target.closest(".row[data-sha]");
         let items = null;
-        if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha);
+        if (row?.dataset.stashIndex !== undefined) items = stashItems(row.dataset.stashIndex, row.dataset.sha);
+        else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha);
         if (!items && row) items = commitItems(row.dataset.sha, row.dataset.merge === "1");
         if (!items) return;
         e.preventDefault();
@@ -334,7 +349,16 @@
         checkRefs();
       });
 
-      document.body.addEventListener("gitlane:changed", () => { reloadDetail(); checkRefs(); });
+      document.body.addEventListener("gitlane:changed", () => {
+        // Stash positions shift after stash actions, so don't reload a stash view.
+        if (currentDetail && currentDetail.startsWith("/partials/stash")) {
+          currentDetail = null;
+          detail.innerHTML = EMPTY_DETAIL;
+        } else {
+          reloadDetail();
+        }
+        checkRefs();
+      });
       document.body.addEventListener("gitlane:committed", () => {
         summary.value = "";
         description.value = "";

@@ -119,12 +119,56 @@ def test_graph_of_real_repo(make_repo, repo_at):
     assert page.width == 2
 
 
-def test_stash_not_in_graph(make_repo, repo_at):
+def test_stash_shown_above_its_base(make_repo, repo_at):
+    """Only the stash itself appears, not Git's internal index/untracked commits."""
     path = make_repo()
-    (path / "README.md").write_text("wip\n")
-    run(path, "stash", "-q")
+    base = commit(path, "a.txt", "base")
+    (path / "a.txt").write_text("wip\n")
+    (path / "new.txt").write_text("untracked\n")
+    run(path, "stash", "-q", "-u", "-m", "half done")
+    commit(path, "b.txt", "after")
     page = graph.graph_page(repo_at(path))
-    assert [r.commit.subject for r in page.rows] == ["Initial commit"]
+    assert [r.commit.subject for r in page.rows] == ["after", "half done", "base", "Initial commit"]
+    st = page.rows[1]
+    assert st.commit.stash == 0 and st.commit.parents == [base]
+    assert st.commit.refs == [Ref("stash", "stash@{0}")]
+    assert st.col != page.rows[0].col  # its own short lane into the base commit
+    assert (st.col, page.rows[2].col) in [(a, b) for a, b, _ in page.rows[2].top]
+
+
+def test_several_stashes_newest_first(make_repo, repo_at):
+    path = make_repo()
+    for msg in ("first", "second"):
+        (path / "README.md").write_text(msg)
+        run(path, "stash", "-q", "-m", msg)
+    rows = graph.graph_page(repo_at(path)).rows
+    assert [(r.commit.subject, r.commit.stash) for r in rows] == \
+           [("second", 0), ("first", 1), ("Initial commit", None)]
+
+
+def test_stash_paging(make_repo, repo_at):
+    path = make_repo()
+    for i in range(4):
+        commit(path, f"{i}.txt")
+    (path / "README.md").write_text("wip")
+    run(path, "stash", "-q")
+    r = repo_at(path)
+    full = graph.graph_page(r, 0, 100).rows
+    p1, p2 = graph.graph_page(r, 0, 3), graph.graph_page(r, 3, 3)
+    assert p1.has_more and not p2.has_more
+    assert [x.commit.sha for x in p1.rows + p2.rows] == [x.commit.sha for x in full]
+    assert len(full) == 6
+
+
+def test_dropping_older_stash_changes_refs_version(make_repo, repo_at):
+    path = make_repo()
+    r = repo_at(path)
+    for msg in ("first", "second"):
+        (path / "README.md").write_text(msg)
+        run(path, "stash", "-q", "-m", msg)
+    v1 = graph.refs_version(r)
+    run(path, "stash", "drop", "-q", "stash@{1}")  # refs/stash itself doesn't move
+    assert graph.refs_version(r) != v1
 
 
 def test_detached_commit_included(make_repo, repo_at):
