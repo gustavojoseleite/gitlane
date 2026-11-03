@@ -47,7 +47,12 @@ Remote operations (push/pull/fetch) must use the user's existing Git setup (SSH 
 
 ### v1 — in
 
-- **Repo:** open the repo in the current folder; "recent repos" list in the UI to switch between repos (stored in a small config file under the user's config dir, e.g. `~/.config/gitlane/`)
+- **Repos & tabs:** one server holds several repos, each in its own **tab** at the top of the page (see milestone 7)
+  - `gitlane <path>` (or `gitlane` inside a repo) opens that repo as a tab; `gitlane` outside a repo opens the repo picker
+  - **"+" tab → repo picker:** recent repos (one click), a **folder browser** listed by the server (starts in the home folder, marks Git repos — the browser can't give real folder paths), and a field to paste a path
+  - **Open tabs and recent repos are remembered** across restarts in `~/.config/gitlane/`; closing a tab never touches the repo
+  - **Toolbar under the tabs** (always visible): current branch with ↑/↓, Fetch, Pull, Push, New branch, Stash, Refresh — these move out of the sidebar
+  - Hidden tabs refresh when you switch to them, not in the background
 - **Status:** list changed / staged / untracked files
 - **Changes:** stage / unstage **whole files**, commit (message box), discard changes (confirm)
 - **Diff viewer:** for working-tree files and for files in any commit
@@ -83,7 +88,8 @@ Build in this order. Each milestone is **done only when its tests pass and the o
 4. **Graph** — commit graph with lanes and labels, click a commit → details, files and diffs. Must stay responsive on a repo with ~10,000 commits (load commits in pages, e.g. 300 at a time).
 5. **Branches** — create/switch/merge/delete, right-click menus on commits and branch labels, simple merge-conflict state (§4).
 6. **Stash** — save/list/apply/pop/drop.
-7. **Polish & release** — recent repos list, README with screenshots, packaging, publish to PyPI.
+7. **Repos & tabs** — several repos in tabs, repo picker (recent / folder browser / paste path), remembered tabs, toolbar under the tabs (§4).
+8. **Polish & release** — README with screenshots, packaging, publish to PyPI.
 
 ## 6. Testing rules
 
