@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gitlane</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <header>
+    <span class="logo">gitlane</span>
+    <button id="refresh" type="button"
+            hx-get="/partials/status" hx-target="#status" title="Refresh (R)">Refresh</button>
+  </header>
+  <main id="status"
+        hx-get="/partials/status"
+        hx-trigger="load, focus from:window">
+    <p class="muted">Loading…</p>
+  </main>
+  <script>
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+        document.getElementById("refresh").click();
+      }
+    });
+    document.body.addEventListener("htmx:responseError", (e) => {
+      document.getElementById("status").innerHTML =
+        '<p class="error">Could not load status (HTTP ' + e.detail.xhr.status +
+        '). If gitlane was restarted, open the new link from your terminal.</p>';
+    });
+  </script>
+</body>
+</html>

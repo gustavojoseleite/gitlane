@@ -1,0 +1,67 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --panel: #f6f8fa;
+  --accent: #0969da;
+  --green: #1a7f37;
+  --yellow: #9a6700;
+  --red: #cf222e;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8d96a0;
+    --border: #30363d;
+    --panel: #161b22;
+    --accent: #4493f8;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.logo { font-weight: 700; letter-spacing: .02em; }
+button {
+  font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+main { max-width: 900px; margin: 0 auto; padding: 16px; }
+h1 { margin: 0; font-size: 22px; }
+h2 { font-size: 15px; margin: 20px 0 6px; }
+.path, .muted { color: var(--muted); }
+.path { margin: 2px 0 12px; font-size: 12px; word-break: break-all; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.branch {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-weight: 600; margin-right: 6px;
+}
+.branch.detached { background: var(--yellow); }
+.sync { color: var(--muted); margin-top: -6px; }
+.clean { color: var(--green); font-weight: 600; margin-top: 20px; }
+.error { color: var(--red); }
+.count { color: var(--muted); font-weight: 400; }
+ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
+li { padding: 4px 10px; border-top: 1px solid var(--border); word-break: break-all; }
+li:first-child { border-top: 0; }
+.tag {
+  display: inline-block; min-width: 72px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--muted);
+}
+.tag.added, .tag.untracked { color: var(--green); }
+.tag.modified, .tag.renamed, .tag.copied, .tag.type-changed { color: var(--yellow); }
+.tag.deleted, .tag.conflict { color: var(--red); }
