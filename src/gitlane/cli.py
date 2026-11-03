@@ -1,4 +1,9 @@
-"""The ``gitlane`` command: find the repo, start the local server, open the browser."""
+"""The ``gitlane`` command: start the local server and open the browser.
+
+``gitlane <path>`` opens that repo as a tab (next to the remembered tabs).
+Plain ``gitlane`` opens the repo in the current folder, or, outside a repo,
+the page where you pick one.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +30,8 @@ def find_free_port() -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="gitlane", description="Open a Git repository in your browser.")
-    p.add_argument("path", nargs="?", default=".", help="folder inside the repository (default: current folder)")
+    p.add_argument("path", nargs="?", default=None,
+                   help="folder inside a repository (default: the current folder, if it is one)")
     p.add_argument("--port", type=int, default=None, help="port to listen on (default: a free port)")
     p.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
     p.add_argument("--version", action="version", version=f"gitlane {__version__}")
@@ -35,13 +41,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        repo = open_repo(args.path)
+        repo = open_repo(args.path or ".")
     except NotAGitRepo as e:
-        print(f"gitlane: {e}", file=sys.stderr)
-        print("Run gitlane inside a Git repository, or pass its path: gitlane ~/dev/myproject", file=sys.stderr)
-        return 1
-    repo_root = Path(repo.working_tree_dir)
-    repo.close()
+        if args.path is not None:  # asked for a specific folder: say what's wrong
+            print(f"gitlane: {e}", file=sys.stderr)
+            print("Pass a folder inside a Git repository, e.g. gitlane ~/dev/myproject, "
+                  "or run plain gitlane and pick one in the browser.", file=sys.stderr)
+            return 1
+        repo_root = None  # pick a repo in the browser
+    else:
+        repo_root = Path(repo.working_tree_dir)
+        repo.close()
 
     import uvicorn  # imported late so `gitlane --help` stays fast
 
@@ -59,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(0.05)
         if server.should_exit:
             return
-        print(f"gitlane {__version__} — {repo_root}", flush=True)
+        print(f"gitlane {__version__} — {repo_root or 'pick a repository in the browser'}", flush=True)
         print(f"Open: {url}", flush=True)
         print("Press Ctrl+C to stop.", flush=True)
         if not args.no_browser:

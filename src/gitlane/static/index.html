@@ -10,13 +10,16 @@
 <body>
   <header>
     <span class="logo">gitlane</span>
-    <button id="refresh" type="button" title="Refresh (R)">Refresh</button>
+    <nav id="tabs" class="tabs" aria-label="Open repositories"></nav>
   </header>
-  <div class="layout">
+  <div id="toolbar-row" class="toolbar-row" hidden>
+    <div id="toolbar" class="toolbar"></div>
+    <button id="refresh" type="button" title="Refresh (R)">Refresh</button>
+  </div>
+  <div id="picker" class="picker" hidden></div>
+  <div class="layout" hidden>
     <aside class="sidebar">
-      <div id="status"
-           hx-get="/partials/status"
-           hx-trigger="load, focus from:window, gitlane:refresh from:body">
+      <div id="status" hx-get="/partials/status" hx-trigger="gitlane:refresh from:body">
         <p class="muted">Loading…</p>
       </div>
       <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status">
@@ -35,7 +38,7 @@
     <div id="g1" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-label="Resize sidebar" title="Drag to resize · double-click to reset"></div>
     <main class="graph-panel">
-      <div id="graph" hx-get="/partials/graph" hx-trigger="load">
+      <div id="graph">
         <p class="muted">Loading history…</p>
       </div>
     </main>
@@ -64,25 +67,177 @@
       let selectedSha = null;
       let refsVersion = null;
 
-      const reloadDetail = () => { if (currentDetail) htmx.ajax("GET", currentDetail, "#detail"); };
+      // ---- tabs: every request says which repo it is for ----------------------
+      let activeRepo = null;  // id of the open tab
+      let tabs = [];          // [{id, name, path}]
+      const drafts = {};      // unfinished commit messages per tab
+      const tabsEl = document.getElementById("tabs");
+      const picker = document.getElementById("picker");
+      const layoutEl = document.querySelector(".layout");
+      const toolbarRow = document.getElementById("toolbar-row");
+      const statusEl = document.getElementById("status");
 
-      const reloadGraph = () => htmx.ajax("GET", "/partials/graph", "#graph");
+      document.body.addEventListener("htmx:configRequest", (e) => {
+        if (activeRepo) e.detail.headers["X-Gitlane-Repo"] = activeRepo;
+      });
+      // A slow answer for a tab you already left must not land in the new tab.
+      document.body.addEventListener("htmx:beforeSwap", (e) => {
+        const sent = e.detail.requestConfig?.headers?.["X-Gitlane-Repo"];
+        if (sent && sent !== activeRepo) e.detail.shouldSwap = false;
+      });
+
+      const api = async (url, body) => {
+        const opts = { headers: activeRepo ? { "X-Gitlane-Repo": activeRepo } : {} };
+        if (body) { opts.method = "POST"; opts.body = new URLSearchParams(body); }
+        const r = await fetch(url, opts);
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok && !data.error) data.error = `Request failed (HTTP ${r.status}).`;
+        return data;
+      };
+
+      const reloadDetail = () => { if (activeRepo && currentDetail) htmx.ajax("GET", currentDetail, "#detail"); };
+
+      const reloadGraph = () => { if (activeRepo) htmx.ajax("GET", "/partials/graph", "#graph"); };
 
       const checkRefs = async () => {
+        const repo = activeRepo;
+        if (!repo) return;
         try {
-          const r = await fetch("/api/refs-version");
-          if (!r.ok) return;
+          const r = await fetch("/api/refs-version", { headers: { "X-Gitlane-Repo": repo } });
+          if (!r.ok || repo !== activeRepo) return;
           const { version } = await r.json();
+          if (repo !== activeRepo) return;
           if (refsVersion !== null && version !== refsVersion) reloadGraph();
           refsVersion = version;
         } catch (_) { /* server stopped; status panel shows the error */ }
       };
 
       const refresh = () => {
+        if (!activeRepo) return;
         htmx.trigger(document.body, "gitlane:refresh");
         reloadDetail();
         reloadGraph();
       };
+
+      // htmx drops a new request for a panel while an old one is still running,
+      // so a slow answer from the previous tab would block the new tab.
+      const abortPending = () => {
+        for (const el of [statusEl, graphEl, detail, picker]) htmx.trigger(el, "htmx:abort");
+      };
+
+      const renderTabs = () => {
+        tabsEl.innerHTML = "";
+        const counts = {};
+        for (const t of tabs) counts[t.name] = (counts[t.name] || 0) + 1;
+        for (const t of tabs) {
+          const wrap = document.createElement("div");
+          wrap.className = "tab" + (t.id === activeRepo && picker.hidden ? " active" : "");
+          wrap.dataset.repo = t.id;
+          const name = document.createElement("button");
+          name.type = "button";
+          name.className = "tab-name";
+          name.title = t.path;
+          // Two repos with the same folder name: add the parent folder.
+          name.textContent = counts[t.name] > 1 ? `${t.name} (${t.path.split("/").slice(-2, -1)[0] || "/"})` : t.name;
+          if (t.id === activeRepo && picker.hidden) name.setAttribute("aria-current", "page");
+          name.addEventListener("click", () => activate(t.id));
+          const close = document.createElement("button");
+          close.type = "button";
+          close.className = "tab-close";
+          close.textContent = "×";
+          close.title = "Close tab (the repo itself is not changed)";
+          close.setAttribute("aria-label", `Close ${t.name}`);
+          close.addEventListener("click", () => closeTab(t.id));
+          wrap.append(name, close);
+          tabsEl.appendChild(wrap);
+        }
+        const plus = document.createElement("button");
+        plus.type = "button";
+        plus.className = "tab-new" + (picker.hidden ? "" : " active");
+        plus.textContent = "+";
+        plus.title = "Open a repository";
+        plus.setAttribute("aria-label", "Open a repository");
+        plus.addEventListener("click", () => showPicker());
+        tabsEl.appendChild(plus);
+      };
+
+      const saveDraft = () => {
+        if (activeRepo) drafts[activeRepo] = { summary: summary.value, description: description.value };
+      };
+
+      const activate = (id, remember = true) => {
+        if (!tabs.some((t) => t.id === id)) return;
+        if (id === activeRepo && picker.hidden) { refresh(); return; }
+        saveDraft();
+        abortPending();
+        activeRepo = id;
+        const d = drafts[id] || {};
+        summary.value = d.summary || "";
+        description.value = d.description || "";
+        updateCounter();
+        picker.hidden = true;
+        layoutEl.hidden = false;
+        toolbarRow.hidden = false;
+        selectedSha = null;
+        currentDetail = null;
+        refsVersion = null;
+        detail.innerHTML = EMPTY_DETAIL;
+        document.getElementById("toolbar").innerHTML = "";
+        statusEl.innerHTML = '<p class="muted">Loading…</p>';
+        graphEl.innerHTML = '<p class="muted">Loading history…</p>';
+        document.title = `${tabs.find((t) => t.id === id).name} — gitlane`;
+        renderTabs();
+        refresh();
+        if (remember) api("/api/workspace/activate", { id });
+      };
+
+      const showPicker = (path) => {
+        saveDraft();
+        abortPending();
+        picker.hidden = false;
+        layoutEl.hidden = true;
+        toolbarRow.hidden = true;
+        document.title = "Open a repository — gitlane";
+        renderTabs();
+        htmx.ajax("GET", "/partials/picker" + (path ? `?path=${encodeURIComponent(path)}` : ""), "#picker");
+      };
+
+      const openRepo = async (path) => {
+        const data = await api("/api/workspace/open", { path });
+        if (data.error) {
+          picker.querySelector(".banner.error")?.remove();
+          const b = document.createElement("div");
+          b.className = "banner error";
+          b.setAttribute("role", "alert");
+          b.textContent = data.error;
+          picker.querySelector("h1")?.after(b);
+          return;
+        }
+        tabs = data.tabs;
+        activate(data.tab.id, false);
+      };
+
+      const closeTab = async (id) => {
+        const data = await api("/api/workspace/close", { id });
+        if (data.error) return;
+        delete drafts[id];
+        tabs = data.tabs;
+        if (id !== activeRepo) { renderTabs(); return; }
+        activeRepo = null;
+        if (data.active && picker.hidden) activate(data.active, false);
+        else showPicker();
+      };
+
+      picker.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-open-path]");
+        if (b) openRepo(b.dataset.openPath);
+      });
+      picker.addEventListener("submit", (e) => {
+        const form = e.target.closest("[data-open-form]");
+        if (!form) return;
+        e.preventDefault();
+        openRepo(form.elements.path.value);
+      });
 
       const showCommit = (sha) => {
         selectedSha = sha;
@@ -166,7 +321,7 @@
 
       // ---- right-click menus ------------------------------------------------
       const menu = document.getElementById("ctx-menu");
-      const currentBranch = () => document.querySelector("#status .repo")?.dataset.branch || "";
+      const currentBranch = () => document.querySelector("#toolbar")?.dataset.branch || "";
       const post = (url, values, confirmText) => {
         if (confirmText && !window.confirm(confirmText)) return;
         htmx.ajax("POST", url, { target: "#status", values });
@@ -313,7 +468,12 @@
         const d = document.getElementById("remote-branches");
         try { if (d && sessionStorage.getItem("remotesOpen")) d.open = true; } catch (_) {}
       });
-      window.addEventListener("focus", () => { reloadDetail(); checkRefs(); });
+      window.addEventListener("focus", () => {
+        if (!activeRepo) return;
+        htmx.trigger(document.body, "gitlane:refresh");
+        reloadDetail();
+        checkRefs();
+      });
 
       // One click handler for all graph rows and parent links.
       document.body.addEventListener("click", (e) => {
@@ -382,11 +542,18 @@
         });
       }
       document.addEventListener("keydown", (e) => {
-        if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey && picker.hidden &&
             !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
           refresh();
         }
       });
+
+      (async () => {  // start: reopen the remembered tabs, or show the picker
+        const data = await api("/api/workspace");
+        tabs = data.tabs || [];
+        if (data.active) activate(data.active, false);
+        else showPicker();
+      })();
       document.body.addEventListener("htmx:responseError", (e) => {
         e.detail.target.innerHTML =
           '<p class="error">Request failed (HTTP ' + e.detail.xhr.status +

@@ -58,13 +58,13 @@ def serve():
 def open_page(browser, serve):
     contexts = []
 
-    def _open(repo_path):
+    def _open(repo_path, wait="#graph .row"):
         base = serve(repo_path)
         ctx = browser.new_context(viewport={"width": 1600, "height": 900})
         contexts.append(ctx)
         page = ctx.new_page()
         page.goto(f"{base}/?token={TOKEN}")
-        page.wait_for_selector("#graph .row")
+        page.wait_for_selector(wait)
         return page
 
     yield _open
@@ -85,7 +85,8 @@ def accept_dialogs(page, answer=None):
 def test_page_loads_status_and_graph(make_repo, open_page):
     path = make_repo()
     page = open_page(path)
-    assert page.inner_text("#status h1") == path.name
+    assert page.inner_text("#tabs .tab.active .tab-name") == path.name
+    assert page.inner_text("#toolbar .branch") == "main"
     assert page.locator("#graph .row").count() == 1
     assert "Initial commit" in page.inner_text("#graph")
 
@@ -298,7 +299,7 @@ def test_new_branch_button_keeps_name_intact(make_repo, open_page):
     path = make_repo()
     page = open_page(path)
     accept_dialogs(page, "feature/ação→nova")
-    page.click("#status button:has-text('New branch')")
+    page.click("#toolbar button:has-text('New branch')")
     assert "Created branch feature/ação→nova" in notice(page)
     assert run(path, "branch", "--show-current") == "feature/ação→nova"
 
@@ -311,7 +312,7 @@ def test_stash_save_view_and_pop(make_repo, open_page):
     (path / "novo.txt").write_text("untracked")
     page = open_page(path)
     accept_dialogs(page, "login pela metade → ação")
-    page.click("#status button:has-text('Stash changes')")
+    page.click("#toolbar button:has-text('Stash changes')")
     assert "Stashed your changes" in notice(page)
     assert "login pela metade → ação" in page.inner_text("#status .stashes")
     assert page.locator("#status .clean").count() == 1
@@ -325,7 +326,7 @@ def test_stash_save_view_and_pop(make_repo, open_page):
     page.wait_for_selector("#status .banner.notice:has-text('Applied and removed')")
     assert (path / "novo.txt").read_text() == "untracked"
     assert page.locator("#status .stash-item").count() == 0
-    assert "Stash changes" in page.inner_text("#status .stashes")  # changes are back, can stash again
+    assert "Stash changes" in page.inner_text("#toolbar")  # changes are back, can stash again
     assert "Click a commit" in page.inner_text("#detail")  # stale stash view cleared
 
 
@@ -335,7 +336,7 @@ def test_stash_drop_needs_confirmation(make_repo, open_page):
     page = open_page(path)
     answers = iter(["keep me", None])  # prompt answer, then dismiss the confirm
     page.on("dialog", lambda d: d.accept(next(answers)) if d.type == "prompt" else d.dismiss())
-    page.click("#status button:has-text('Stash changes')")
+    page.click("#toolbar button:has-text('Stash changes')")
     page.wait_for_selector("#status .stash-item")
     item = page.locator("#status .stash-item")
     item.hover()
@@ -349,7 +350,7 @@ def test_stash_in_graph_click_and_menu(make_repo, open_page):
     (path / "README.md").write_text("wip\n")
     page = open_page(path)
     accept_dialogs(page, "from the graph")
-    page.click("#status button:has-text('Stash changes')")
+    page.click("#toolbar button:has-text('Stash changes')")
     row = page.wait_for_selector("#graph .row.stash-row")  # graph reloads by itself
     assert "stash@{0}" in row.inner_text() and "from the graph" in row.inner_text()
     row.click()
@@ -385,3 +386,144 @@ def test_row_buttons_never_cover_the_name(make_repo, open_page):
     for b in row.locator(".actions button").all():
         box = b.bounding_box()
         assert box["x"] >= name["x"] + name["width"] - 1  # buttons sit after the name
+
+
+# --- tabs & repo picker (milestone 7) ------------------------------------------
+
+def tab_names(page):
+    return page.locator("#tabs .tab-name").all_inner_texts()
+
+
+def active_tab(page):
+    return page.inner_text("#tabs .tab.active .tab-name")
+
+
+def test_start_without_repo_shows_picker(open_page, make_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    make_repo("site")
+    page = open_page(None, wait="#picker h1")
+    assert page.locator(".layout").is_hidden() and page.locator("#toolbar-row").is_hidden()
+    assert tab_names(page) == []
+    page.click("#picker [data-open-path]:has-text('site')")  # the browser starts in the home folder
+    page.wait_for_selector("#graph .row")
+    assert tab_names(page) == ["site"] and page.locator("#picker").is_hidden()
+
+
+def test_open_second_repo_and_switch(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    (b / "beta-only.txt").write_text("x")
+    page = open_page(a)
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_selector("#status button.file:has-text('beta-only.txt')")
+    assert tab_names(page) == ["alpha", "beta"] and active_tab(page) == "beta"
+    assert page.title() == "beta — gitlane"
+    page.click("#tabs .tab-name:has-text('alpha')")
+    page.wait_for_selector("#status .clean")
+    assert active_tab(page) == "alpha"
+    assert page.locator("#status button.file:has-text('beta-only.txt')").count() == 0
+
+
+def test_actions_go_to_the_active_tab(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    (a / "a.txt").write_text("a")
+    (b / "b.txt").write_text("b")
+    page = open_page(a)
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_selector("#status button.file:has-text('b.txt')")
+    page.click("#status .untracked h2 button:has-text('Stage all')")
+    page.wait_for_selector("#status .staged")
+    assert run(b, "diff", "--cached", "--name-only") == "b.txt"
+    assert run(a, "diff", "--cached", "--name-only") == ""
+
+
+def test_picker_errors_are_shown(make_repo, open_page, tmp_path):
+    page = open_page(make_repo())
+    page.click("#tabs .tab-new")
+    page.wait_for_selector("#open-path")
+    page.fill("#open-path", str(tmp_path / "missing"))
+    page.press("#open-path", "Enter")
+    assert "does not exist" in page.wait_for_selector("#picker .banner.error").inner_text()
+    assert tab_names(page) == ["repo"]
+
+
+def test_close_tabs(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    page = open_page(a)
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_function("document.title === 'beta — gitlane'")
+    page.click("#tabs .tab-close[aria-label='Close beta']")
+    page.wait_for_function("document.title === 'alpha — gitlane'")
+    assert tab_names(page) == ["alpha"]
+    assert (b / ".git").is_dir()  # closing never touches the repo
+    page.click("#tabs .tab-close[aria-label='Close alpha']")
+    page.wait_for_selector("#picker h1")
+    assert tab_names(page) == []
+    assert "beta" in page.inner_text("#picker .recent")  # closed repos are offered again
+
+
+def test_tabs_remembered_after_reload(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    page = open_page(a)
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_function("document.title === 'beta — gitlane'")
+    page.reload()
+    page.wait_for_selector("#graph .row")
+    assert tab_names(page) == ["alpha", "beta"] and active_tab(page) == "beta"
+
+
+def test_commit_draft_kept_per_tab(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    page = open_page(a)
+    page.fill("#summary", "alpha message")
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_function("document.title === 'beta — gitlane'")
+    assert page.input_value("#summary") == ""
+    page.click("#tabs .tab-name:has-text('alpha')")
+    page.wait_for_function("document.title === 'alpha — gitlane'")
+    assert page.input_value("#summary") == "alpha message"
+
+
+def test_toolbar_stays_visible_when_sidebar_scrolls(make_repo, open_page):
+    path = make_repo()
+    for i in range(60):
+        (path / f"file{i:02}.txt").write_text("x")
+    page = open_page(path)
+    page.locator(".sidebar").evaluate("el => el.scrollTop = el.scrollHeight")
+    assert page.locator("#toolbar button:has-text('Push')").is_visible()
+    assert page.locator("#toolbar button:has-text('Stash changes')").is_visible()
+
+
+def test_slow_answer_for_old_tab_neither_blocks_nor_lands(make_repo, open_page):
+    a, b = make_repo("alpha"), make_repo("beta")
+    (b / "beta-only.txt").write_text("x")
+    page = open_page(a)
+    page.click("#tabs .tab-new")
+    page.fill("#open-path", str(b))
+    page.press("#open-path", "Enter")
+    page.wait_for_selector("#status button.file:has-text('beta-only.txt')")
+    held = []
+    # Hold back the first status answer (beta's), let later ones through.
+    page.route("**/partials/status", lambda route: route.continue_() if held else held.append(route))
+    page.click("#refresh")
+    while not held:
+        page.wait_for_timeout(20)
+    page.click("#tabs .tab-name:has-text('alpha')")
+    page.wait_for_selector("#status .clean")
+    try:
+        held[0].continue_()  # beta's answer finally arrives (if not cancelled already)
+    except Exception:
+        pass
+    page.wait_for_timeout(400)
+    assert page.locator("#status .clean").count() == 1
+    assert "beta-only.txt" not in page.inner_text("#status")
+    assert page.inner_text("#toolbar .branch") == "main" and active_tab(page) == "alpha"

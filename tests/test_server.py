@@ -3,11 +3,18 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from gitlane.server import COOKIE_NAME, create_app
+from gitlane.server import COOKIE_NAME, REPO_HEADER, create_app
+from gitlane.workspace import repo_id
 
 TOKEN = "secret-token-for-tests"
 PORT = 54321
 BASE = f"http://127.0.0.1:{PORT}"
+
+
+def make_client(path, follow_redirects=False):
+    """A client for one repo tab: every request names the repo, like the page does."""
+    return TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=follow_redirects,
+                      headers={REPO_HEADER: repo_id(path.resolve())})
 
 
 @pytest.fixture
@@ -21,7 +28,7 @@ def repo_path(make_repo):
 @pytest.fixture
 def anon(repo_path):
     """Client without the token cookie."""
-    return TestClient(create_app(repo_path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
+    return make_client(repo_path)
 
 
 @pytest.fixture
@@ -110,7 +117,7 @@ def test_partial_status_escapes_html(client):
 
 def test_partial_status_clean(make_repo):
     path = make_repo("clean")
-    c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
+    c = make_client(path)
     c.get(f"/?token={TOKEN}")
     assert "Working tree clean" in c.get("/partials/status").text
 
@@ -141,12 +148,12 @@ def test_same_origin_post_allowed(client):
 def test_stage_then_commit_flow(client, repo_path):
     r = client.post("/actions/stage", data={"path": "README.md"})
     assert r.status_code == 200
-    assert "gitlane:changed" in r.headers["hx-trigger"]
+    assert "gitlane:changed" in r.headers["hx-trigger-after-swap"]
     assert [f["path"] for f in client.get("/api/status").json()["staged"]] == ["README.md"]
 
     r = client.post("/actions/commit", data={"message": "Change readme"})
     assert "Committed" in r.text
-    assert "gitlane:committed" in r.headers["hx-trigger"]
+    assert "gitlane:committed" in r.headers["hx-trigger-after-swap"]
     data = client.get("/api/status").json()
     assert data["head_summary"] == "Change readme" and data["staged"] == []
 
@@ -155,7 +162,7 @@ def test_commit_error_shown_in_banner(client):
     r = client.post("/actions/commit", data={"message": "nothing staged"})
     assert r.status_code == 200
     assert 'class="banner error"' in r.text and "Nothing staged" in r.text
-    assert "gitlane:committed" not in r.headers.get("hx-trigger", "")
+    assert "gitlane:committed" not in r.headers.get("hx-trigger-after-swap", "")
 
 
 def test_unstage_rename_sends_both_paths(client, repo_path):
@@ -228,7 +235,7 @@ def test_force_push_button_only_when_diverged(tmp_path, make_repo):
     run(path, "commit", "-q", "-m", "a")
     run(path, "push", "-q")
     run(path, "commit", "-q", "--amend", "-m", "amended")  # now ahead 1, behind 1
-    c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
+    c = make_client(path)
     c.get(f"/?token={TOKEN}")
     html = c.get("/partials/status").text
     assert "/actions/force-push" in html and "hx-confirm" in html and "force-with-lease" in html
@@ -301,7 +308,7 @@ def test_refs_version_endpoint(client, repo_path):
 
 def test_empty_repo_graph(make_repo):
     path = make_repo("empty", commit=False)
-    c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
+    c = make_client(path)
     c.get(f"/?token={TOKEN}")
     assert "No commits yet" in c.get("/partials/graph").text
 
@@ -330,7 +337,7 @@ def test_blob_endpoint_refuses_non_images_and_bad_input(anon, client):
 
 def test_blob_requires_cookie(make_repo):
     path = make_repo("cookieless")
-    c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE)
+    c = make_client(path, follow_redirects=True)
     assert c.get("/blob", params={"rev": "WORKTREE", "path": "a.png"}).status_code == 403
 
 

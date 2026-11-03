@@ -19,6 +19,7 @@ def isolated_git(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)  # gitlane's state goes to the temp home
 
 
 def run(cwd: Path, *args: str) -> str:

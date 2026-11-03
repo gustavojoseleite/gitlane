@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from contextvars import ContextVar
 from dataclasses import asdict
 from html import escape
 from importlib import resources
@@ -14,21 +15,35 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, blobs, branches, git_ops, graph, stash
+from . import __version__, blobs, branches, git_ops, graph, stash, workspace
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
+from .workspace import Workspace
 
 COOKIE_NAME = "gitlane_token"
 STATIC_DIR = Path(str(resources.files("gitlane") / "static"))
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+REPO_HEADER = "X-Gitlane-Repo"
+
+# Id of the tab a request is for: the X-Gitlane-Repo header, or ?repo= for
+# images (an <img> can't send headers). Set by the middleware.
+_current_repo: ContextVar[str | None] = ContextVar("gitlane_repo", default=None)
 
 
-def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
-    """Build the app for one repository.
+class NoRepo(Exception):
+    """The request names no open tab (closed meanwhile, or none chosen)."""
 
+
+def create_app(repo_path: str | Path | None, token: str, port: int,
+               ws: Workspace | None = None) -> FastAPI:
+    """Build the app.
+
+    ``repo_path`` (optional) is opened as a tab next to the remembered ones;
     ``token`` is the secret from the startup URL; ``port`` is used for the
     Host-header check (DNS-rebinding protection).
     """
-    repo_path = Path(repo_path)
+    ws = ws or Workspace()
+    if repo_path is not None:
+        ws.open(repo_path)
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
@@ -58,10 +73,19 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
         cookie = request.cookies.get(COOKIE_NAME, "")
         if not secrets.compare_digest(cookie, token):
             return _forbidden()
+        _current_repo.set(request.headers.get(REPO_HEADER) or request.query_params.get("repo"))
         return await call_next(request)
 
+    @app.exception_handler(NoRepo)
+    async def no_repo(request: Request, exc: NoRepo):
+        return PlainTextResponse("This repo isn't open in gitlane any more. Reload the page.",
+                                 status_code=409)
+
     def with_repo(fn, *args):
-        repo = open_repo(repo_path)
+        path = ws.path_of(_current_repo.get())
+        if path is None:
+            raise NoRepo()
+        repo = open_repo(path)
         try:
             return fn(repo, *args)
         finally:
@@ -75,7 +99,9 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
                                  action=action, branch_lists=branches.list_branches(repo),
                                  stashes=stash.list_stashes(repo))
         html = with_repo(build)
-        headers = {"HX-Trigger": ", ".join(events)} if events else {}
+        # After the swap: a handler may clear the panel holding the clicked button, and
+        # htmx needs that button in the page to place the out-of-band toolbar.
+        headers = {"HX-Trigger-After-Swap": ", ".join(events)} if events else {}
         return HTMLResponse(html, headers=headers)
 
     async def run_action(fn, *args, notice: str | None = None,
@@ -94,6 +120,38 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    # --- tabs & repo picker (milestone 7) -------------------------------------
+
+    @app.get("/api/workspace")
+    def api_workspace() -> JSONResponse:
+        return JSONResponse(ws.as_dict())
+
+    @app.post("/api/workspace/open")
+    async def api_open(request: Request) -> JSONResponse:
+        try:
+            tab = ws.open((await _form(request)).get("path", [""])[0])
+        except NotAGitRepo as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"tab": tab.as_dict(), **ws.as_dict()})
+
+    @app.post("/api/workspace/close")
+    async def api_close(request: Request) -> JSONResponse:
+        ws.close((await _form(request)).get("id", [""])[0])
+        return JSONResponse(ws.as_dict())
+
+    @app.post("/api/workspace/activate")
+    async def api_activate(request: Request) -> JSONResponse:
+        ws.activate((await _form(request)).get("id", [""])[0])
+        return JSONResponse(ws.as_dict())
+
+    @app.get("/partials/picker", response_class=HTMLResponse)
+    def partial_picker(path: str | None = None) -> str:
+        try:
+            listing, error = workspace.browse(path), None
+        except NotAGitRepo as e:
+            listing, error = workspace.browse(None), str(e)
+        return render_picker(ws.recent_repos(), listing, error)
 
     @app.get("/api/status")
     def api_status() -> JSONResponse:
@@ -411,22 +469,24 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         commit = '<span class="muted">No commits yet</span>'
 
     if s.upstream:
-        sync = f'tracking <code>{escape(s.upstream)}</code> · ↑{s.ahead} ↓{s.behind}'
+        sync = f'tracking <code>{escape(s.upstream)}</code>'
     elif s.branch:
         sync = '<span class="muted">no upstream</span>'
     else:
         sync = ""
 
+    can_stash = bool(s.staged or s.unstaged or s.untracked) and not s.conflicted and bool(s.head_commit)
+    toolbar = (
+        f'<div id="toolbar" class="toolbar" hx-swap-oob="true" data-branch="{_attr(s.branch or "")}" '
+        f'data-repo-root="{_attr(s.root)}">'
+        f'<div class="tb-head">{head} <span class="tb-commit" title="{_attr(s.head_summary or "")}">{commit}</span>'
+        f'{f"<span class=tb-sync>{sync}</span>" if sync else ""}</div>'
+        f'{_sync_toolbar(s, can_stash)}</div>'
+    )
     parts = [
+        toolbar,
         _error_banner(error, hint, action) if error else "",
         f'<div class="banner notice" role="status">{escape(notice)}</div>' if notice else "",
-        f'<section class="repo" data-branch="{_attr(s.branch or "")}">',
-        f'<h1>{escape(s.name)}</h1>',
-        f'<p class="path">{escape(s.root)}</p>',
-        f'<p>{head} {commit}</p>',
-        f'<p class="sync">{sync}</p>' if sync else "",
-        _sync_toolbar(s),
-        "</section>",
         _operation_box(s),
     ]
     if s.clean:
@@ -446,15 +506,8 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
 
 
 def _stash_list(s: RepoStatus, stashes: list) -> str:
-    has_changes = bool(s.staged or s.unstaged or s.untracked)
-    btn = ""
-    if has_changes and not s.conflicted:
-        btn = _prompt_button("/actions/stash/save", "message", "Stash changes",
-                             "Stash all your changes (including untracked files).\n\n"
-                             "Optional message to remember what this is:")
     if not stashes:
-        return (f'<section class="files stashes"><h2>Stashes <span class="count">0</span>{btn}</h2></section>'
-                if btn else "")
+        return ""
     items = []
     for st in stashes:
         vals = {"index": str(st.index), "sha": st.sha}
@@ -473,7 +526,7 @@ def _stash_list(s: RepoStatus, stashes: list) -> str:
             f'<span class="stash-meta-row"><span class="muted stash-meta">{where}{st.date}</span>'
             f'<span class="actions">{actions}</span></span></li>'
         )
-    return (f'<section class="files stashes"><h2>Stashes <span class="count">{len(stashes)}</span>{btn}</h2>'
+    return (f'<section class="files stashes"><h2>Stashes <span class="count">{len(stashes)}</span></h2>'
             f'<ul>{"".join(items)}</ul></section>')
 
 
@@ -520,11 +573,8 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
             f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
         )
-    new_btn = _prompt_button("/actions/branch/create", "name", "New branch",
-                             "Name for the new branch (starts from the current commit):")
-    html = (f'<section class="files branches"><h2>Branches <span class="count">{len(local)}</span>{new_btn}</h2>'
-            f'<ul>{"".join(items)}</ul></section>' if local else
-            f'<section class="files branches"><h2>Branches{new_btn}</h2></section>')
+    html = (f'<section class="files branches"><h2>Branches <span class="count">{len(local)}</span></h2>'
+            f'<ul>{"".join(items)}</ul></section>' if local else "")
     if remote:
         ritems = "".join(
             f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">'
@@ -561,7 +611,7 @@ def _error_banner(error: str, hint: str | None, action: dict | None = None) -> s
     return f'<div class="banner error" role="alert">{escape(error)}{button}</div>'
 
 
-def _sync_toolbar(s: RepoStatus) -> str:
+def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
     def btn(url: str, label: str, title: str, css: str = "", confirm: str | None = None) -> str:
         extra = f' hx-confirm="{_attr(confirm)}"' if confirm else ""
         return (f'<button type="button" class="{css}" hx-post="{url}" hx-target="#status" '
@@ -585,7 +635,17 @@ def _sync_toolbar(s: RepoStatus) -> str:
                      "gitlane uses --force-with-lease, so it stops if the remote changed "
                      "since your last fetch."),
         ))
-    return f'<div class="sync-bar">{"".join(buttons)}<span class="spinner" aria-hidden="true"></span></div>'
+    tools = []
+    if s.head_commit:
+        tools.append(_prompt_button("/actions/branch/create", "name", "New branch",
+                                    "Name for the new branch (starts from the current commit):", css=""))
+    if can_stash:
+        tools.append(_prompt_button("/actions/stash/save", "message", "Stash changes",
+                                    "Stash all your changes (including untracked files).\n\n"
+                                    "Optional message to remember what this is:", css=""))
+    sep = '<span class="tb-sep" aria-hidden="true"></span>' if tools else ""
+    return (f'<div class="sync-bar">{"".join(buttons)}{sep}{"".join(tools)}'
+            '<span class="spinner" aria-hidden="true"></span></div>')
 
 
 def _file_list(title: str, files: list[FileChange], kind: str) -> str:
@@ -634,8 +694,63 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
     )
 
 
+def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
+    """The "+" tab: recent repos, a folder browser and a path field."""
+    def open_btn(path: Path, label: str, css: str = "") -> str:
+        return (f'<button type="button" class="{css}" data-open-path="{_attr(str(path))}" '
+                f'title="{_attr(str(path))}">{label}</button>')
+
+    parts = ['<div class="picker-inner"><h1>Open a repository</h1>']
+    if error:
+        parts.append(f'<div class="banner error" role="alert">{escape(error)}</div>')
+    parts.append(
+        '<form class="picker-path" data-open-form>'
+        '<label for="open-path">Path</label>'
+        f'<input id="open-path" name="path" type="text" autocomplete="off" spellcheck="false" '
+        f'placeholder="{_attr(str(Path.home() / "dev" / "project"))}">'
+        '<button type="submit" class="primary">Open</button></form>'
+    )
+    if recent:
+        items = "".join(
+            f'<li>{open_btn(p, f"<strong>{escape(p.name)}</strong> <span class=muted>{_wrap(str(p.parent))}</span>", "file")}</li>'
+            for p in recent
+        )
+        parts.append(f'<section class="files recent"><h2>Recent</h2><ul>{items}</ul></section>')
+
+    crumbs, acc = [], None
+    for part in listing.path.parts:
+        acc = Path(part) if acc is None else acc / part
+        crumbs.append(f'<button type="button" class="crumb" hx-get="/partials/picker?path={quote(str(acc), safe="")}" '
+                      f'hx-target="#picker">{escape(part.rstrip("/") or "/")}</button>')
+    here = (open_btn(listing.path, "Open this folder", "small primary") if listing.is_repo else "")
+    rows = []
+    if listing.parent:
+        rows.append(f'<li><button type="button" class="file" hx-get="/partials/picker?path='
+                    f'{quote(str(listing.parent), safe="")}" hx-target="#picker">↰ ..</button></li>')
+    for f in listing.folders:
+        if f.is_repo:
+            rows.append(f'<li class="is-repo">{open_btn(f.path, f"<span class=repo-mark>git</span> {_wrap(f.name)}", "file")}'
+                        f'<span class="actions"><button type="button" class="icon-btn" title="Show folders inside" '
+                        f'aria-label="Show folders inside {_attr(f.name)}" hx-get="/partials/picker?path='
+                        f'{quote(str(f.path), safe="")}" hx-target="#picker">›</button></span></li>')
+        else:
+            rows.append(f'<li><button type="button" class="file" hx-get="/partials/picker?path='
+                        f'{quote(str(f.path), safe="")}" hx-target="#picker">📁 {_wrap(f.name)}</button></li>')
+    if not listing.folders:
+        rows.append('<li class="muted empty">No folders here.</li>')
+    more = '<p class="muted">Too many folders; showing the first ones.</p>' if listing.truncated else ""
+    parts.append(
+        f'<section class="files browser"><h2>Browse <span class="crumbs">{crumbs[0]}{"/".join(crumbs[1:])}</span>{here}</h2>'
+        f'<ul>{"".join(rows)}</ul>{more}</section>'
+        '<p class="muted">Git repositories are marked <span class="repo-mark">git</span>. '
+        'Click one to open it in a new tab.</p></div>'
+    )
+    return "".join(parts)
+
+
 def blob_url(rev: str, path: str) -> str:
-    return f"/blob?rev={quote(rev, safe='')}&path={quote(path, safe='')}"
+    repo = quote(_current_repo.get() or "", safe="")
+    return f"/blob?rev={quote(rev, safe='')}&path={quote(path, safe='')}&repo={repo}"
 
 
 def render_images(before: str | None, after: str | None) -> str:
