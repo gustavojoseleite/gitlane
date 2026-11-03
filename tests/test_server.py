@@ -259,7 +259,7 @@ def test_graph_partial(client, repo_path):
     assert html.count('class="row"') == 2
     assert "&lt;b&gt;not bold&lt;/b&gt;" in html and "<b>" not in html
     assert "<svg" in html and 'data-graph-width="1"' in html
-    assert 'class="ref head"' in html
+    assert 'class="ref ref-head"' in html
     assert 'class="more"' not in html  # everything fits in one page
 
 
@@ -400,3 +400,93 @@ def test_index_has_summary_and_description_fields(client):
     html = client.get("/").text
     assert 'name="summary"' in html and 'name="description"' in html
     assert 'name="message"' not in html
+
+
+# --- milestone 5: branches ------------------------------------------------------
+
+M5_ACTIONS = ["/actions/branch/create", "/actions/branch/checkout", "/actions/branch/merge",
+              "/actions/branch/delete", "/actions/commit/checkout", "/actions/commit/cherry-pick",
+              "/actions/commit/revert", "/actions/commit/reset", "/actions/operation/abort",
+              "/actions/operation/continue"]
+
+
+@pytest.mark.parametrize("path", M5_ACTIONS)
+def test_m5_actions_require_cookie(anon, path):
+    assert anon.post(path, data={"name": "x", "sha": "abc"}).status_code == 403
+
+
+@pytest.mark.parametrize("path", M5_ACTIONS)
+def test_m5_actions_reject_get(client, path):
+    assert client.get(path).status_code == 405
+
+
+def test_branch_list_in_sidebar(client, repo_path):
+    from .conftest import run
+    run(repo_path, "branch", "feature")
+    html = client.get("/partials/status").text
+    assert 'data-ref-kind="head" data-ref-name="main"' in html
+    assert 'data-ref-kind="branch" data-ref-name="feature"' in html
+    assert "hx-prompt" in html and "New branch" in html
+    assert 'data-branch="main"' in html
+
+
+def test_create_branch_via_prompt_header(client, repo_path):
+    from .conftest import run
+    r = client.post("/actions/branch/create", headers={"HX-Prompt": "feature/x"})
+    assert "Created branch feature/x" in r.text
+    assert run(repo_path, "branch", "--show-current") == "feature/x"
+
+
+def test_create_branch_at_commit_and_bad_name(client, repo_path):
+    from .conftest import run
+    sha = run(repo_path, "rev-parse", "HEAD")
+    r = client.post("/actions/branch/create", data={"name": "bad name", "start": sha})
+    assert 'class="banner error"' in r.text and "not a valid branch name" in r.text
+    r = client.post("/actions/branch/create", data={"name": "good", "start": sha})
+    assert "Created branch good" in r.text
+
+
+def test_delete_unmerged_shows_delete_anyway_button(client, repo_path):
+    from .conftest import run
+    run(repo_path, "checkout", "-q", "-b", "wip")
+    run(repo_path, "commit", "-q", "--allow-empty", "-m", "wip")
+    run(repo_path, "checkout", "-q", "main")
+    r = client.post("/actions/branch/delete", data={"name": "wip"})
+    assert "Delete anyway" in r.text and "&quot;force&quot;: &quot;1&quot;" in r.text
+    r = client.post("/actions/branch/delete", data={"name": "wip", "force": "1"})
+    assert "Deleted branch wip" in r.text
+
+
+def test_conflict_box_and_abort(client, repo_path):
+    from .conftest import run
+    run(repo_path, "checkout", "-q", "--", "README.md")
+    run(repo_path, "checkout", "-q", "-b", "feature")
+    (repo_path / "README.md").write_text("feature\n")
+    run(repo_path, "commit", "-q", "-am", "feature")
+    run(repo_path, "checkout", "-q", "main")
+    (repo_path / "README.md").write_text("main\n")
+    run(repo_path, "commit", "-q", "-am", "main")
+    r = client.post("/actions/branch/merge", data={"name": "feature"})
+    assert 'class="operation"' in r.text and "Merge in progress" in r.text
+    assert "Mark resolved and commit" in r.text and "Abort merge" in r.text
+    r = client.post("/actions/operation/abort")
+    assert "Merge aborted" in r.text and 'class="operation"' not in r.text
+
+
+def test_reset_and_revert_endpoints(client, repo_path):
+    from .conftest import run
+    first = run(repo_path, "rev-parse", "HEAD")
+    run(repo_path, "commit", "-q", "--allow-empty", "-m", "second")
+    r = client.post("/actions/commit/reset", data={"sha": first, "mode": "soft"})
+    assert f"Reset main to {first[:7]} (soft)" in r.text
+    r = client.post("/actions/commit/reset", data={"sha": first, "mode": "bogus"})
+    assert "Unknown reset mode" in r.text
+
+
+def test_graph_rows_have_menu_data(client):
+    html = client.get("/partials/graph").text
+    assert 'data-merge="0"' in html and 'data-ref-kind="head"' in html
+
+
+def test_index_has_context_menu(client):
+    assert 'id="ctx-menu"' in client.get("/").text

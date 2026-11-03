@@ -40,32 +40,47 @@ button {
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
+/* Panel sizes come from CSS variables that the dividers (gutters) change. */
 .layout {
-  display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(340px, 38%);
-  grid-template-areas: "side graph detail";
+  --side-w: clamp(260px, 22vw, 360px); --detail-w: clamp(300px, 32vw, 600px); --graph-h: 58%;
+  display: grid;
+  grid-template-columns: var(--side-w) 6px minmax(280px, 1fr) 6px var(--detail-w);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "side g1 graph g2 detail";
   height: calc(100vh - 45px);
 }
-.sidebar { grid-area: side; overflow: auto; padding: 16px; border-right: 1px solid var(--border); }
-.graph-panel { grid-area: graph; overflow: auto; min-width: 0; }
-.detail-panel { grid-area: detail; overflow: auto; padding: 16px; min-width: 0; border-left: 1px solid var(--border); }
-@media (max-width: 1200px) {
+.sidebar { grid-area: side; overflow: auto; padding: 16px; min-width: 0; }
+.graph-panel { grid-area: graph; overflow: auto; min-width: 0; container-type: inline-size; }
+.detail-panel { grid-area: detail; overflow: auto; padding: 16px; min-width: 0; }
+.gutter { background: var(--border); position: relative; z-index: 2; touch-action: none; }
+.gutter::after { content: ""; position: absolute; inset: 0 -4px; }  /* bigger grab area */
+.gutter[aria-orientation="vertical"] { cursor: col-resize; }
+.gutter[aria-orientation="horizontal"] { cursor: row-resize; }
+.gutter[aria-orientation="horizontal"]::after { inset: -4px 0; }
+.gutter:hover, .gutter:focus-visible, .gutter.dragging { background: var(--accent); outline: none; }
+#g1 { grid-area: g1; }
+#g2 { grid-area: g2; }
+body.resizing { user-select: none; }
+body.resizing.col { cursor: col-resize; }
+body.resizing.row { cursor: row-resize; }
+@media (max-width: 1200px) {  /* details move under the graph */
   .layout {
-    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-    grid-template-rows: 55% 45%;
-    grid-template-areas: "side graph" "side detail";
+    grid-template-columns: var(--side-w) 6px minmax(0, 1fr);
+    grid-template-rows: var(--graph-h) 6px minmax(0, 1fr);
+    grid-template-areas: "side g1 graph" "side g1 g2" "side g1 detail";
   }
-  .detail-panel { border-left: 0; border-top: 1px solid var(--border); }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px) {  /* phone: everything stacked, no dividers */
   .layout { grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "side" "graph" "detail"; height: auto; }
-  .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
-  .graph-panel { max-height: 70vh; }
+  .gutter { display: none; }
+  .sidebar { border-bottom: 1px solid var(--border); }
+  .graph-panel { max-height: 70vh; border-bottom: 1px solid var(--border); }
 }
 h1 { margin: 0; font-size: 22px; }
 h2 { font-size: 15px; margin: 20px 0 6px; display: flex; align-items: center; gap: 6px; }
 h2 .small { margin-left: auto; }
 .path, .muted { color: var(--muted); }
-.path { margin: 2px 0 12px; font-size: 12px; word-break: break-all; }
+.path { margin: 2px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .branch {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
@@ -83,7 +98,7 @@ li {
 }
 li .file {
   flex: 1; min-width: 0; text-align: left; border: 0; padding: 2px 0;
-  background: none; word-break: break-all;
+  background: none; overflow-wrap: anywhere;
 }
 li .file[hx-get]:hover { color: var(--accent); text-decoration: underline; }
 li .actions { display: flex; gap: 4px; visibility: hidden; }
@@ -103,7 +118,7 @@ button.primary:hover { filter: brightness(1.1); }
   color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
 }
 .commit .hint { color: var(--muted); font-size: 12px; }
-.diff-title { margin-top: 0; word-break: break-all; }
+.diff-title { margin-top: 0; overflow-wrap: anywhere; }
 table.diff {
   width: 100%; border-collapse: collapse; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   border: 1px solid var(--border);
@@ -145,9 +160,10 @@ li:first-child { border-top: 0; }
 /* --- graph --- */
 #graph { --lanes: 1; --lane-w: 14px; font-size: 13px; }
 .row {
-  display: grid; align-items: center; height: 28px; cursor: pointer;
-  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) minmax(0, 140px) 120px 64px;
+  display: grid; align-items: center; height: 28px; cursor: pointer; column-gap: 8px;
+  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 9em 8.6em 4.6em;
   padding-right: 8px; border-bottom: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
 }
 .row:hover { background: var(--panel); }
 .row.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
@@ -156,18 +172,26 @@ li:first-child { border-top: 0; }
 .row .g svg { display: block; }
 .row .msg { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .row .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .author, .row .date { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; }
+.row .author, .row .date { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .sha code { color: var(--muted); font-size: 12px; }
-@media (max-width: 1500px) { .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 110px 64px; } .row .author { display: none; } }
+/* Columns react to the graph panel's own width, so they follow the dividers. */
+@container (max-width: 760px) {
+  .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 8.6em 4.6em; }
+  .row .author { display: none; }
+}
+@container (max-width: 520px) {
+  .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 4.6em; }
+  .row .date { display: none; }
+}
 .more, .empty-graph { padding: 12px 16px; color: var(--muted); }
 .ref {
   flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px;
-  border: 1px solid var(--border); white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+  border: 1px solid var(--border); white-space: nowrap; max-width: 14em; overflow: hidden; text-overflow: ellipsis;
 }
-.ref.head { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-.ref.branch { border-color: var(--accent); color: var(--accent); }
-.ref.remote { color: var(--muted); }
-.ref.tag { border-color: var(--yellow); color: var(--yellow); }
+.ref-head { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.ref-branch { border-color: var(--accent); color: var(--accent); }
+.ref-remote { color: var(--muted); }
+.ref-tag { border-color: var(--yellow); color: var(--yellow); }
 svg line, svg path { stroke-width: 2; fill: none; }
 svg circle { stroke-width: 2; }
 svg circle.merge { fill: var(--bg) !important; }
@@ -188,7 +212,7 @@ svg .head-ring { fill: none; stroke: var(--fg); stroke-width: 1.5; }
 }
 .commit-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0 0 8px; }
 .commit-detail dt { color: var(--muted); }
-.commit-detail dd { margin: 0; word-break: break-all; }
+.commit-detail dd { margin: 0; overflow-wrap: anywhere; }
 .commit-detail h3 { font-size: 14px; margin: 16px 0 6px; }
 .full-sha { user-select: all; }
 .sha-link { border: 0; background: none; padding: 0 4px 0 0; color: var(--accent); }
@@ -214,3 +238,34 @@ svg .head-ring { fill: none; stroke: var(--fg); stroke-width: 1.5; }
 .commit .summary-row { width: 100%; position: relative; }
 .commit .counter { position: absolute; right: 8px; top: 7px; font-size: 11px; color: var(--muted); pointer-events: none; }
 .commit .counter.long { color: var(--yellow); }
+
+/* --- context menu --- */
+.ctx-menu {
+  position: fixed; z-index: 100; min-width: 240px; max-width: 420px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
+}
+.ctx-menu button {
+  display: block; width: 100%; text-align: left; border: 0; border-radius: 4px; padding: 5px 10px;
+  background: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ctx-menu button:hover:not(:disabled), .ctx-menu button:focus-visible { background: var(--panel); outline: none; }
+.ctx-menu button.danger { color: var(--red); }
+.ctx-menu button:disabled { color: var(--muted); cursor: default; }
+.ctx-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+
+/* --- branches & operations --- */
+.branch-item.current .file { font-weight: 600; color: var(--accent); }
+.remotes { margin-top: 12px; }
+.remotes summary { cursor: pointer; font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+.operation {
+  margin: 12px 0; padding: 10px 12px; border: 1px solid var(--yellow); border-radius: 6px;
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+}
+.operation p { margin: 4px 0 8px; }
+.op-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+button.danger { color: var(--red); }
+.banner-action { margin-top: 8px; }
+
+.commit-detail .ref { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+.branch-item > .muted { flex: none; font-size: 12px; }

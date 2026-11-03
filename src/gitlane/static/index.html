@@ -32,15 +32,20 @@
         <span class="hint">Ctrl+Enter</span>
       </form>
     </aside>
+    <div id="g1" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
+         aria-label="Resize sidebar" title="Drag to resize · double-click to reset"></div>
     <main class="graph-panel">
       <div id="graph" hx-get="/partials/graph" hx-trigger="load">
         <p class="muted">Loading history…</p>
       </div>
     </main>
+    <div id="g2" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
+         aria-label="Resize details panel" title="Drag to resize · double-click to reset"></div>
     <section id="detail" class="detail-panel">
       <p class="muted">Click a commit or a file to see its details.</p>
     </section>
   </div>
+  <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
   <script>
     (() => {
       const graphEl = document.getElementById("graph");
@@ -88,6 +93,202 @@
       };
 
       document.getElementById("refresh").addEventListener("click", refresh);
+
+      // ---- resizable panels -------------------------------------------------
+      const layout = document.querySelector(".layout");
+      const stacked = () => window.matchMedia("(max-width: 1200px)").matches;
+      const SIZES = {  // css variable -> [default, min, max-fraction-of-layout]
+        "--side-w": ["340px", 220, 0.45],
+        "--detail-w": ["480px", 280, 0.6],
+        "--graph-h": ["58%", 120, 0.85],
+      };
+      const loadSizes = () => {
+        for (const v of Object.keys(SIZES)) {
+          try { const saved = localStorage.getItem("gitlane" + v); if (saved) layout.style.setProperty(v, saved); } catch (_) {}
+        }
+      };
+      const setSize = (v, px) => {
+        const [, min, maxFrac] = SIZES[v];
+        const total = v === "--graph-h" ? layout.clientHeight : layout.clientWidth;
+        const value = Math.round(Math.max(min, Math.min(px, total * maxFrac))) + "px";
+        layout.style.setProperty(v, value);
+        try { localStorage.setItem("gitlane" + v, value); } catch (_) {}
+      };
+      const resetSize = (v) => {
+        layout.style.removeProperty(v);
+        try { localStorage.removeItem("gitlane" + v); } catch (_) {}
+      };
+      // Which variable a gutter controls depends on the layout (g2 is horizontal when stacked).
+      const gutterVar = (g) => g.id === "g1" ? "--side-w" : (stacked() ? "--graph-h" : "--detail-w");
+      const syncGutters = () => {
+        document.getElementById("g2").setAttribute("aria-orientation", stacked() ? "horizontal" : "vertical");
+      };
+      const currentSize = (v) => {
+        const panel = { "--side-w": ".sidebar", "--detail-w": ".detail-panel", "--graph-h": ".graph-panel" }[v];
+        const r = document.querySelector(panel).getBoundingClientRect();
+        return v === "--graph-h" ? r.height : r.width;
+      };
+      for (const g of document.querySelectorAll(".gutter")) {
+        g.addEventListener("pointerdown", (e) => {
+          e.preventDefault();
+          const v = gutterVar(g);
+          const start = v === "--graph-h" ? e.clientY : e.clientX;
+          const startSize = currentSize(v);
+          const dir = v === "--detail-w" ? -1 : 1;  // the details panel grows when dragging left
+          g.setPointerCapture(e.pointerId);
+          g.classList.add("dragging");
+          document.body.classList.add("resizing", v === "--graph-h" ? "row" : "col");
+          const move = (ev) => setSize(v, startSize + dir * ((v === "--graph-h" ? ev.clientY : ev.clientX) - start));
+          const up = () => {
+            g.removeEventListener("pointermove", move);
+            g.classList.remove("dragging");
+            document.body.classList.remove("resizing", "row", "col");
+          };
+          g.addEventListener("pointermove", move);
+          g.addEventListener("pointerup", up, { once: true });
+          g.addEventListener("pointercancel", up, { once: true });
+        });
+        g.addEventListener("dblclick", () => resetSize(gutterVar(g)));
+        g.addEventListener("keydown", (e) => {
+          const v = gutterVar(g);
+          const keys = v === "--graph-h" ? { ArrowUp: -1, ArrowDown: 1 } : { ArrowLeft: -1, ArrowRight: 1 };
+          if (!(e.key in keys)) return;
+          e.preventDefault();
+          const dir = v === "--detail-w" ? -1 : 1;
+          setSize(v, currentSize(v) + keys[e.key] * dir * (e.shiftKey ? 64 : 16));
+        });
+      }
+      loadSizes();
+      syncGutters();
+      window.addEventListener("resize", syncGutters);
+
+      // ---- right-click menus ------------------------------------------------
+      const menu = document.getElementById("ctx-menu");
+      const currentBranch = () => document.querySelector("#status .repo")?.dataset.branch || "";
+      const post = (url, values, confirmText) => {
+        if (confirmText && !window.confirm(confirmText)) return;
+        htmx.ajax("POST", url, { target: "#status", values });
+      };
+      const closeMenu = () => { menu.hidden = true; menu.innerHTML = ""; };
+
+      const openMenu = (x, y, items) => {
+        menu.innerHTML = "";
+        for (const item of items) {
+          if (item === "-") { menu.appendChild(document.createElement("hr")); continue; }
+          const b = document.createElement("button");
+          b.type = "button";
+          b.setAttribute("role", "menuitem");
+          b.textContent = item.label;
+          if (item.danger) b.classList.add("danger");
+          if (item.disabled) { b.disabled = true; b.title = item.disabled; }
+          b.addEventListener("click", () => { closeMenu(); item.run(); });
+          menu.appendChild(b);
+        }
+        menu.hidden = false;
+        const r = menu.getBoundingClientRect();
+        menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+        menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+        menu.querySelector("button:not(:disabled)")?.focus();
+      };
+
+      const commitItems = (sha, isMerge) => {
+        const short = sha.slice(0, 7);
+        const branch = currentBranch();
+        const onto = branch || "the current commit";
+        const mergeNote = isMerge ? "Not available for merge commits yet" : "";
+        return [
+          { label: `Checkout ${short}`, run: () => post("/actions/commit/checkout", { sha },
+              `Check out ${short}?\n\nYou will be in "detached HEAD": new commits won't belong to ` +
+              "any branch until you create one.") },
+          { label: "Create branch here…", run: () => {
+              const name = window.prompt(`Name for the new branch at ${short}:`);
+              if (name) post("/actions/branch/create", { name, start: sha });
+          } },
+          "-",
+          { label: `Cherry-pick onto ${onto}`, disabled: mergeNote,
+            run: () => post("/actions/commit/cherry-pick", { sha }) },
+          { label: "Revert this commit", disabled: mergeNote,
+            run: () => post("/actions/commit/revert", { sha },
+              `Revert ${short}?\n\nThis adds a new commit that undoes its changes.`) },
+          "-",
+          { label: `Reset ${branch || "HEAD"} here — soft (keep changes staged)`,
+            run: () => post("/actions/commit/reset", { sha, mode: "soft" },
+              `Move ${branch || "HEAD"} to ${short}?\n\nCommits after it leave the branch; ` +
+              "their changes stay staged.") },
+          { label: `Reset ${branch || "HEAD"} here — mixed (keep changes unstaged)`,
+            run: () => post("/actions/commit/reset", { sha, mode: "mixed" },
+              `Move ${branch || "HEAD"} to ${short}?\n\nCommits after it leave the branch; ` +
+              "their changes stay in your files, unstaged.") },
+          { label: `Reset ${branch || "HEAD"} here — hard (discard everything)`, danger: true,
+            run: () => post("/actions/commit/reset", { sha, mode: "hard" },
+              `HARD reset ${branch || "HEAD"} to ${short}?\n\nAll uncommitted changes AND the ` +
+              "commits after it will be thrown away. This cannot be undone from gitlane.") },
+          "-",
+          { label: "Copy commit hash", run: () => navigator.clipboard?.writeText(sha) },
+        ];
+      };
+
+      const refItems = (kind, name, sha) => {
+        const branch = currentBranch();
+        const mergeItem = {
+          label: branch ? `Merge ${name} into ${branch}` : "Merge (switch to a branch first)",
+          disabled: branch ? "" : "You are not on a branch",
+          run: () => post("/actions/branch/merge", { name }, `Merge ${name} into ${branch}?`),
+        };
+        if (kind === "branch") {
+          return [
+            { label: `Checkout ${name}`, run: () => post("/actions/branch/checkout", { name }) },
+            mergeItem,
+            "-",
+            { label: `Delete ${name}…`, danger: true,
+              run: () => post("/actions/branch/delete", { name }, `Delete the branch ${name}?`) },
+          ];
+        }
+        if (kind === "remote") {
+          return [
+            { label: `Checkout ${name} as a local branch`,
+              run: () => post("/actions/branch/checkout", { name }) },
+            mergeItem,
+          ];
+        }
+        if (kind === "head") {
+          return [{ label: `${name} is the current branch`, disabled: "Already checked out", run: () => {} },
+                  ...(sha ? ["-", ...commitItems(sha, false).slice(1, 2)] : [])];
+        }
+        if (kind === "tag" && sha) {
+          return [{ label: `Checkout tag ${name}`, run: () => post("/actions/commit/checkout", { sha },
+              `Check out tag ${name}?\n\nYou will be in "detached HEAD".`) }];
+        }
+        return null;
+      };
+
+      document.body.addEventListener("contextmenu", (e) => {
+        const ref = e.target.closest("[data-ref-kind]");
+        const row = e.target.closest(".row[data-sha]");
+        let items = null;
+        if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha);
+        if (!items && row) items = commitItems(row.dataset.sha, row.dataset.merge === "1");
+        if (!items) return;
+        e.preventDefault();
+        if (row) showCommit(row.dataset.sha);
+        openMenu(e.clientX, e.clientY, items);
+      });
+      document.addEventListener("click", (e) => { if (!menu.contains(e.target)) closeMenu(); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+      window.addEventListener("blur", closeMenu);
+      document.querySelectorAll(".graph-panel, .sidebar").forEach((el) =>
+        el.addEventListener("scroll", closeMenu, { passive: true }));
+
+      // Keep the "Remote branches" list open/closed across refreshes.
+      document.body.addEventListener("toggle", (e) => {
+        if (e.target.id === "remote-branches") {
+          try { sessionStorage.setItem("remotesOpen", e.target.open ? "1" : ""); } catch (_) {}
+        }
+      }, true);
+      document.body.addEventListener("htmx:afterSwap", () => {
+        const d = document.getElementById("remote-branches");
+        try { if (d && sessionStorage.getItem("remotesOpen")) d.open = true; } catch (_) {}
+      });
       window.addEventListener("focus", () => { reloadDetail(); checkRefs(); });
 
       // One click handler for all graph rows and parent links.

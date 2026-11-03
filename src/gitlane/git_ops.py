@@ -28,7 +28,11 @@ def open_repo(path: str | Path) -> git.Repo:
     # Treat every path we pass as a literal file name, never as a pattern:
     # a file called "*" must not mean "all files".
     # Never let Git wait for a password on a terminal nobody is watching.
-    repo.git.update_environment(GIT_LITERAL_PATHSPECS="1", GIT_TERMINAL_PROMPT="0")
+    # ...and never open an editor (merge/revert/cherry-pick would wait forever).
+    repo.git.update_environment(
+        GIT_LITERAL_PATHSPECS="1", GIT_TERMINAL_PROMPT="0",
+        GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true", GIT_MERGE_AUTOEDIT="no",
+    )
     return repo
 
 
@@ -53,6 +57,7 @@ class RepoStatus:
     unstaged: list[FileChange] = field(default_factory=list)
     untracked: list[FileChange] = field(default_factory=list)
     conflicted: list[FileChange] = field(default_factory=list)
+    operation: str | None = None  # "merge", "cherry-pick", "revert", "rebase"
 
     @property
     def detached(self) -> bool:
@@ -115,7 +120,19 @@ def get_status(repo: git.Repo) -> RepoStatus:
 
     if status.head_commit is not None:
         status.head_summary = repo.head.commit.summary
+    status.operation = operation_in_progress(repo)
     return status
+
+
+def operation_in_progress(repo: git.Repo) -> str | None:
+    git_dir = Path(repo.git_dir)
+    if (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists():
+        return "rebase"
+    for name, op in (("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick"),
+                     ("REVERT_HEAD", "revert")):
+        if (git_dir / name).exists():
+            return op
+    return None
 
 
 def _parse_header(entry: str, status: RepoStatus) -> None:
@@ -150,9 +167,11 @@ class GitError(Exception):
     own message.
     """
 
-    def __init__(self, message: str, hint: str | None = None):
+    def __init__(self, message: str, hint: str | None = None, action: dict | None = None):
         super().__init__(message)
         self.hint = hint
+        # Optional follow-up button: {"label", "url", "vals", "confirm"}
+        self.action = action
 
 
 MAX_DIFF_LINES = 3000
@@ -234,12 +253,26 @@ _HINTS = [
      "Commit or stash them first."),
     ("untracked working tree files would be overwritten",
      "Untracked files would be overwritten by the pull. Move, commit or delete them first."),
+    ("would be overwritten by checkout",
+     "You have uncommitted changes that conflict with that branch. Commit or stash them first."),
+    ("not fully merged",
+     "This branch has commits that are not merged into the current branch. "
+     "Deleting it may lose them."),
+    ("Cannot delete branch",
+     "You can't delete the branch you are on. Switch to another branch first."),
+    ("already exists",
+     "A branch with that name already exists."),
+    ("previous cherry-pick is now empty",
+     "The changes from this commit are already in your branch, so there is nothing to apply."),
     ("CONFLICT",
-     "The pull stopped with merge conflicts. Fix the conflicted files in your editor, "
-     "then stage them and commit (conflict tools arrive in a later milestone)."),
+     "Git stopped because of conflicts. Fix the conflicted files in your editor, then click "
+     "\"Mark resolved and commit\" — or click \"Abort\" to go back to how things were."),
     ("Automatic merge failed",
-     "The pull stopped with merge conflicts. Fix the conflicted files in your editor, "
-     "then stage them and commit (conflict tools arrive in a later milestone)."),
+     "Git stopped because of conflicts. Fix the conflicted files in your editor, then click "
+     "\"Mark resolved and commit\" — or click \"Abort\" to go back to how things were."),
+    ("after resolving the conflicts",
+     "Git stopped because of conflicts. Fix the conflicted files in your editor, then click "
+     "\"Mark resolved and commit\" — or click \"Abort\" to go back to how things were."),
     ("does not appear to be a git repository",
      "The remote URL is wrong or you don't have access to it."),
     ("Repository not found",

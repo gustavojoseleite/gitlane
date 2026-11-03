@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, blobs, git_ops, graph
+from . import __version__, blobs, branches, git_ops, graph
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 
 COOKIE_NAME = "gitlane_token"
@@ -68,8 +68,12 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
             repo.close()
 
     def status_response(error: str | None = None, notice: str | None = None,
-                        events: tuple[str, ...] = (), hint: str | None = None) -> HTMLResponse:
-        html = render_status(with_repo(get_status), error=error, notice=notice, hint=hint)
+                        events: tuple[str, ...] = (), hint: str | None = None,
+                        action: dict | None = None) -> HTMLResponse:
+        def build(repo):
+            return render_status(get_status(repo), error=error, notice=notice, hint=hint,
+                                 action=action, branch_lists=branches.list_branches(repo))
+        html = with_repo(build)
         headers = {"HX-Trigger": ", ".join(events)} if events else {}
         return HTMLResponse(html, headers=headers)
 
@@ -79,7 +83,7 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
             result = with_repo(fn, *args)
         except (GitError, NotAGitRepo) as e:
             return status_response(error=str(e), hint=getattr(e, "hint", None),
-                                   events=("gitlane:changed",))
+                                   action=getattr(e, "action", None), events=("gitlane:changed",))
         if callable(notice):
             notice = notice(result)
         return status_response(notice=notice, events=("gitlane:changed", *extra_events))
@@ -225,6 +229,59 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     async def action_force_push() -> HTMLResponse:
         return await run_action(git_ops.push, True, notice=lambda msg: msg)
 
+    # --- branches & commit operations (milestone 5) ---------------------------
+
+    async def field(request: Request, name: str) -> str:
+        return (await _form(request)).get(name, [""])[0]
+
+    @app.post("/actions/branch/create", response_class=HTMLResponse)
+    async def action_branch_create(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        # The sidebar button uses htmx's hx-prompt, which sends the answer in a header.
+        name = form.get("name", [""])[0] or request.headers.get("hx-prompt", "")
+        start = form.get("start", [""])[0] or None
+        return await run_action(branches.create_branch, name, start, notice=lambda m: m)
+
+    @app.post("/actions/branch/checkout", response_class=HTMLResponse)
+    async def action_branch_checkout(request: Request) -> HTMLResponse:
+        return await run_action(branches.checkout, await field(request, "name"), notice=lambda m: m)
+
+    @app.post("/actions/branch/merge", response_class=HTMLResponse)
+    async def action_branch_merge(request: Request) -> HTMLResponse:
+        return await run_action(branches.merge, await field(request, "name"), notice=lambda m: m)
+
+    @app.post("/actions/branch/delete", response_class=HTMLResponse)
+    async def action_branch_delete(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(branches.delete_branch, form.get("name", [""])[0],
+                                form.get("force", [""])[0] == "1", notice=lambda m: m)
+
+    @app.post("/actions/commit/checkout", response_class=HTMLResponse)
+    async def action_commit_checkout(request: Request) -> HTMLResponse:
+        return await run_action(branches.checkout_commit, await field(request, "sha"), notice=lambda m: m)
+
+    @app.post("/actions/commit/cherry-pick", response_class=HTMLResponse)
+    async def action_cherry_pick(request: Request) -> HTMLResponse:
+        return await run_action(branches.cherry_pick, await field(request, "sha"), notice=lambda m: m)
+
+    @app.post("/actions/commit/revert", response_class=HTMLResponse)
+    async def action_revert(request: Request) -> HTMLResponse:
+        return await run_action(branches.revert, await field(request, "sha"), notice=lambda m: m)
+
+    @app.post("/actions/commit/reset", response_class=HTMLResponse)
+    async def action_reset(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(branches.reset, form.get("sha", [""])[0], form.get("mode", [""])[0],
+                                notice=lambda m: m)
+
+    @app.post("/actions/operation/abort", response_class=HTMLResponse)
+    async def action_abort() -> HTMLResponse:
+        return await run_action(branches.abort_operation, notice=lambda m: m)
+
+    @app.post("/actions/operation/continue", response_class=HTMLResponse)
+    async def action_continue() -> HTMLResponse:
+        return await run_action(branches.continue_operation, notice=lambda m: m)
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
 
@@ -249,6 +306,11 @@ def _forbidden() -> PlainTextResponse:
 
 # --- HTML fragments -------------------------------------------------------
 
+def _wrap(name: str) -> str:
+    """Escape a path or branch name and allow line breaks only after '/' and '_'."""
+    return escape(name).replace("/", "/<wbr>").replace("_", "_<wbr>")
+
+
 def _attr(value) -> str:
     """Escape a value for use inside a double-quoted HTML attribute."""
     return escape(value if isinstance(value, str) else json.dumps(value), quote=True)
@@ -265,7 +327,8 @@ def _post(url: str, vals: dict | None = None, confirm: str | None = None,
 
 
 def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None,
-                  hint: str | None = None) -> str:
+                  hint: str | None = None, action: dict | None = None,
+                  branch_lists: tuple[list, list[str]] | None = None) -> str:
     if s.branch:
         head = f'<span class="branch">{escape(s.branch)}</span>'
     elif s.detached:
@@ -286,15 +349,16 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         sync = ""
 
     parts = [
-        _error_banner(error, hint) if error else "",
+        _error_banner(error, hint, action) if error else "",
         f'<div class="banner notice" role="status">{escape(notice)}</div>' if notice else "",
-        '<section class="repo">',
+        f'<section class="repo" data-branch="{_attr(s.branch or "")}">',
         f'<h1>{escape(s.name)}</h1>',
         f'<p class="path">{escape(s.root)}</p>',
         f'<p>{head} {commit}</p>',
         f'<p class="sync">{sync}</p>' if sync else "",
         _sync_toolbar(s),
         "</section>",
+        _operation_box(s),
     ]
     if s.clean:
         parts.append('<p class="clean">Working tree clean ✓</p>')
@@ -305,14 +369,83 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
             _file_list("Changes", s.unstaged, "unstaged"),
             _file_list("Untracked", s.untracked, "untracked"),
         ]
+    if branch_lists is not None:
+        parts.append(_branch_lists(s, *branch_lists))
     return "\n".join(p for p in parts if p)
 
 
-def _error_banner(error: str, hint: str | None) -> str:
+def _operation_box(s: RepoStatus) -> str:
+    if not s.operation:
+        return ""
+    names = {"merge": "Merge", "cherry-pick": "Cherry-pick", "revert": "Revert", "rebase": "Rebase"}
+    title = names[s.operation]
+    n = len(s.conflicted)
+    if n:
+        what = f"{n} file{'s' if n != 1 else ''} with conflicts. Fix them in your editor, save, then:"
+    else:
+        what = "No conflicts left. Finish it:"
+    finish = ("" if s.operation == "rebase" else
+              _post("/actions/operation/continue", label="Mark resolved and commit", css="primary"))
+    abort = _post("/actions/operation/abort", label=f"Abort {s.operation}", css="danger",
+                  confirm=f"Abort the {s.operation}?\n\nAll changes it made, including conflict "
+                          "fixes you did, will be undone.")
+    return (f'<section class="operation" role="alert"><strong>{title} in progress</strong>'
+            f'<p>{escape(what)}</p><div class="op-buttons">{finish}{abort}</div></section>')
+
+
+def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
+    items = []
+    for b in local:
+        counts = ""
+        if b.gone:
+            counts = '<span class="muted" title="Deleted on the remote">gone</span>'
+        elif b.ahead or b.behind:
+            counts = f'<span class="muted">↑{b.ahead} ↓{b.behind}</span>'
+        if b.current:
+            items.append(f'<li class="branch-item current" data-ref-kind="head" data-ref-name="{_attr(b.name)}">'
+                         f'<span class="file" title="{_attr(b.name)}">● {_wrap(b.name)}</span>{counts}</li>')
+            continue
+        actions = ""
+        if s.branch:
+            actions += _post("/actions/branch/merge", {"name": b.name}, label="Merge", css="small",
+                             confirm=f"Merge {b.name} into {s.branch}?")
+        actions += _post("/actions/branch/delete", {"name": b.name}, label="Delete", css="small danger",
+                         confirm=f"Delete the branch {b.name}?")
+        items.append(
+            f'<li class="branch-item" data-ref-kind="branch" data-ref-name="{_attr(b.name)}">'
+            f'<button type="button" class="file" title="Switch to {_attr(b.name)}" '
+            f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
+            f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
+        )
+    new_btn = (f'<button type="button" class="small" hx-post="/actions/branch/create" hx-target="#status" '
+               f'hx-prompt="Name for the new branch (starts from the current commit):">New branch</button>')
+    html = (f'<section class="files branches"><h2>Branches <span class="count">{len(local)}</span>{new_btn}</h2>'
+            f'<ul>{"".join(items)}</ul></section>' if local else
+            f'<section class="files branches"><h2>Branches{new_btn}</h2></section>')
+    if remote:
+        ritems = "".join(
+            f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">'
+            f'<button type="button" class="file" title="Check out as a local branch" '
+            f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": r})}">'
+            f'{_wrap(r)}</button></li>'
+            for r in remote
+        )
+        html += (f'<details class="files remotes" id="remote-branches"><summary>Remote branches '
+                 f'<span class="count">{len(remote)}</span></summary><ul>{ritems}</ul></details>')
+    return html
+
+
+def _error_banner(error: str, hint: str | None, action: dict | None = None) -> str:
+    button = ""
+    if action:
+        button = ('<div class="banner-action">'
+                  + _post(action["url"], action.get("vals"), confirm=action.get("confirm"),
+                          label=action["label"], css="danger")
+                  + "</div>")
     if hint:
         return (f'<div class="banner error" role="alert"><strong>{escape(hint)}</strong>'
-                f'<details><summary>Git said</summary><pre>{escape(error)}</pre></details></div>')
-    return f'<div class="banner error" role="alert">{escape(error)}</div>'
+                f'<details><summary>Git said</summary><pre>{escape(error)}</pre></details>{button}</div>')
+    return f'<div class="banner error" role="alert">{escape(error)}{button}</div>'
 
 
 def _sync_toolbar(s: RepoStatus) -> str:
@@ -354,9 +487,9 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
 
     items = []
     for f in files:
-        name = escape(f.path)
+        name = _wrap(f.path)
         if f.orig_path:
-            name = f"{escape(f.orig_path)} → {name}"
+            name = f"{_wrap(f.orig_path)} → {name}"
         diff_url = f"/partials/diff?path={quote(f.path, safe='')}&staged={1 if kind == 'staged' else 0}"
         actions = ""
         if kind == "staged":
@@ -379,7 +512,7 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
         file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#detail"'
         items.append(
             f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
-            f'<button type="button" class="file"{file_btn}>{name}</button>'
+            f'<button type="button" class="file" title="{_attr(f.path)}"{file_btn}>{name}</button>'
             f'<span class="actions">{actions}</span></li>'
         )
     return (
@@ -406,7 +539,7 @@ def render_images(before: str | None, after: str | None) -> str:
 def render_diff(d: FileDiff, where: str | None = None,
                 images: tuple[str | None, str | None] | None = None) -> str:
     where = where or ("staged" if d.staged else "working tree")
-    head = f'<h2 class="diff-title">{escape(d.path)} <span class="muted">({where})</span></h2>'
+    head = f'<h2 class="diff-title">{_wrap(d.path)} <span class="muted">({where})</span></h2>'
     if images:
         head += render_images(*images)
         if d.binary or d.empty:
@@ -470,15 +603,16 @@ def render_row_svg(row: graph.Row) -> str:
 
 def render_refs(refs: list[graph.Ref]) -> str:
     labels = {
-        "head": ("ref head", "●&nbsp;"), "branch": ("ref branch", ""),
-        "remote": ("ref remote", ""), "tag": ("ref tag", "🏷&nbsp;"),
-        "detached": ("ref head", "HEAD"),
+        "head": ("ref ref-head", "●&nbsp;"), "branch": ("ref ref-branch", ""),
+        "remote": ("ref ref-remote", ""), "tag": ("ref ref-tag", "🏷&nbsp;"),
+        "detached": ("ref ref-head", "HEAD"),
     }
     out = []
     for r in refs:
         css, prefix = labels[r.kind]
         name = "" if r.kind == "detached" else escape(r.name)
-        out.append(f'<span class="{css}" title="{escape(r.kind)}">{prefix}{name}</span>')
+        out.append(f'<span class="{css}" title="{_attr(r.name)} ({escape(r.kind)})" data-ref-kind="{escape(r.kind)}" '
+                   f'data-ref-name="{_attr(r.name)}">{prefix}{name}</span>')
     return "".join(out)
 
 
@@ -489,7 +623,7 @@ def render_graph_page(page: graph.GraphPage) -> str:
     for row in page.rows:
         c = row.commit
         rows.append(
-            f'<div class="row" data-sha="{c.sha}" tabindex="0">'
+            f'<div class="row" data-sha="{c.sha}" data-merge="{1 if len(c.parents) > 1 else 0}" tabindex="0">'
             f'<div class="g">{render_row_svg(row)}</div>'
             f'<div class="msg">{render_refs(c.refs)}<span class="subject">{escape(c.subject)}</span></div>'
             f'<div class="author" title="{_attr(c.email)}">{escape(c.author)}</div>'
@@ -516,10 +650,10 @@ def render_commit(d: graph.CommitDetail) -> str:
         params = f"sha={c.sha}&path={quote(f.path, safe='')}"
         if f.orig_path:
             params += f"&orig={quote(f.orig_path, safe='')}"
-        name = escape(f.path) if not f.orig_path else f"{escape(f.orig_path)} → {escape(f.path)}"
+        name = _wrap(f.path) if not f.orig_path else f"{_wrap(f.orig_path)} → {_wrap(f.path)}"
         files.append(
             f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
-            f'<button type="button" class="file" hx-get="{_attr("/partials/commit-diff?" + params)}" '
+            f'<button type="button" class="file" title="{_attr(f.path)}" hx-get="{_attr("/partials/commit-diff?" + params)}" '
             f'hx-target="#commit-diff">{name}</button></li>'
         )
     note = ""
