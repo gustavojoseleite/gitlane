@@ -116,3 +116,17 @@ li:first-child { border-top: 0; }
 .tag.added, .tag.untracked { color: var(--green); }
 .tag.modified, .tag.renamed, .tag.copied, .tag.type-changed { color: var(--yellow); }
 .tag.deleted, .tag.conflict { color: var(--red); }
+.sync-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
+.sync-bar button:disabled { opacity: .5; cursor: progress; }
+.sync-bar .spinner {
+  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; display: none; animation: spin .8s linear infinite;
+}
+.htmx-request .sync-bar .spinner, .sync-bar:has(button:disabled) .spinner { display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.banner details { margin-top: 6px; color: var(--fg); }
+.banner summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.banner pre {
+  margin: 6px 0 0; white-space: pre-wrap; word-break: break-word;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}

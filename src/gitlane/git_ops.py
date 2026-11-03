@@ -27,7 +27,8 @@ def open_repo(path: str | Path) -> git.Repo:
         raise NotAGitRepo(f"Bare repositories are not supported: {path}")
     # Treat every path we pass as a literal file name, never as a pattern:
     # a file called "*" must not mean "all files".
-    repo.git.update_environment(GIT_LITERAL_PATHSPECS="1")
+    # Never let Git wait for a password on a terminal nobody is watching.
+    repo.git.update_environment(GIT_LITERAL_PATHSPECS="1", GIT_TERMINAL_PROMPT="0")
     return repo
 
 
@@ -143,7 +144,15 @@ def _add_change(status: RepoStatus, xy: str, path: str, orig: str | None = None)
 # --- Changes (milestone 2) ------------------------------------------------
 
 class GitError(Exception):
-    """A Git operation failed; the message is safe to show to the user."""
+    """A Git operation failed; the message is safe to show to the user.
+
+    ``hint`` is an optional plain-language explanation shown above Git's
+    own message.
+    """
+
+    def __init__(self, message: str, hint: str | None = None):
+        super().__init__(message)
+        self.hint = hint
 
 
 MAX_DIFF_LINES = 3000
@@ -176,9 +185,73 @@ def _run(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except git.GitCommandError as e:
-        msg = (e.stderr or e.stdout or str(e)).strip()
-        msg = msg.removeprefix("stderr:").strip().strip("'").strip()
-        raise GitError(msg or "Git command failed.") from None
+        msg = "\n".join(
+            part.strip().removeprefix("stderr:").removeprefix("stdout:").strip().strip("'").strip()
+            for part in (e.stderr, e.stdout) if part and str(part).strip()
+        ) or str(e)
+        raise GitError(msg, hint=explain(msg)) from None
+
+
+# Common Git failures -> plain-language hints. First match wins.
+_HINTS = [
+    ("Permission denied (publickey)",
+     "The remote did not accept your SSH key. Check it works with "
+     "`ssh -T git@github.com` (or your host) in a terminal."),
+    ("Host key verification failed",
+     "This SSH host is not known yet. Connect once from a terminal "
+     "(for example `ssh -T git@github.com`) to accept its key, then try again."),
+    ("terminal prompts disabled",
+     "This HTTPS remote needs a username/password and gitlane cannot ask for it. "
+     "Set up a Git credential helper or switch the remote to SSH."),
+    ("could not read Username",
+     "This HTTPS remote needs a username/password and gitlane cannot ask for it. "
+     "Set up a Git credential helper or switch the remote to SSH."),
+    ("Could not resolve host",
+     "Cannot reach the remote host. Check your internet connection."),
+    ("Couldn't connect to server",
+     "Cannot connect to the remote server. Check the remote URL and your network."),
+    ("Connection refused",
+     "The remote refused the connection. Check the remote URL and your network."),
+    ("Connection timed out",
+     "The connection to the remote timed out. Check your network."),
+    ("did not complete in",
+     "The operation took too long and was stopped. Check your network and try again."),
+    ("stale info",
+     "The remote branch changed since your last fetch, so force push was refused "
+     "to protect that work. Fetch, look at the new commits, then decide."),
+    ("fetch first",
+     "The remote has commits you don't have yet. Pull first, then push."),
+    ("non-fast-forward",
+     "The remote has commits you don't have yet. Pull first, then push."),
+    ("Not possible to fast-forward",
+     "Your branch and the remote have both changed, and your Git settings only allow "
+     "fast-forward pulls."),
+    ("divergent branches",
+     "Your branch and the remote have both changed. Your Git settings decide how to "
+     "combine them: set `git config pull.rebase false` to merge."),
+    ("would be overwritten by merge",
+     "You have uncommitted changes to files the pull wants to update. "
+     "Commit or stash them first."),
+    ("untracked working tree files would be overwritten",
+     "Untracked files would be overwritten by the pull. Move, commit or delete them first."),
+    ("CONFLICT",
+     "The pull stopped with merge conflicts. Fix the conflicted files in your editor, "
+     "then stage them and commit (conflict tools arrive in a later milestone)."),
+    ("Automatic merge failed",
+     "The pull stopped with merge conflicts. Fix the conflicted files in your editor, "
+     "then stage them and commit (conflict tools arrive in a later milestone)."),
+    ("does not appear to be a git repository",
+     "The remote URL is wrong or you don't have access to it."),
+    ("Repository not found",
+     "The remote repository was not found, or you don't have access to it."),
+]
+
+
+def explain(message: str) -> str | None:
+    for needle, hint in _HINTS:
+        if needle in message:
+            return hint
+    return None
 
 
 def stage(repo: git.Repo, paths: list[str]) -> None:
@@ -304,3 +377,107 @@ def parse_diff(text: str, path: str, staged: bool) -> FileDiff:
             if line.startswith("Binary files"):
                 result.binary = True
     return result
+
+
+# --- Sync (milestone 3) ---------------------------------------------------
+
+NETWORK_TIMEOUT = 120  # seconds
+
+
+def _network_kwargs(repo: git.Repo) -> dict:
+    """Extra options for commands that talk to a remote.
+
+    SSH is put in batch mode so it fails instead of waiting for a passphrase
+    or a host-key question, unless the user configured SSH themselves.
+    """
+    env = {}
+    user_ssh = os.environ.get("GIT_SSH_COMMAND") or os.environ.get("GIT_SSH")
+    if not user_ssh:
+        user_ssh = _config(repo, "core.sshCommand")
+    if not user_ssh:
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return {"env": env, "kill_after_timeout": NETWORK_TIMEOUT}
+
+
+def _config(repo: git.Repo, key: str) -> str | None:
+    """Read a Git setting the way Git does (all levels, includes); None if unset."""
+    code, out, _ = repo.git.config("--get", key, with_extended_output=True, with_exceptions=False)
+    return out.strip() if code == 0 else None
+
+
+def _current_branch(repo: git.Repo) -> str:
+    if repo.head.is_detached:
+        raise GitError("You are not on a branch (detached HEAD). Switch to a branch first.")
+    return repo.active_branch.name
+
+
+def _upstream(repo: git.Repo, branch: str) -> str | None:
+    code, out, _ = repo.git.rev_parse(
+        "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{upstream}}",
+        with_extended_output=True, with_exceptions=False,
+    )
+    return out.strip() if code == 0 and out.strip() else None
+
+
+def _head_sha(repo: git.Repo) -> str | None:
+    return repo.head.commit.hexsha if _has_head(repo) else None
+
+
+def _require_remote(repo: git.Repo) -> None:
+    if not repo.remotes:
+        raise GitError("This repository has no remote. Add one with "
+                       "`git remote add origin <url>`.")
+
+
+def fetch(repo: git.Repo) -> str:
+    _require_remote(repo)
+    _run(repo.git.fetch, "--all", "--prune", **_network_kwargs(repo))
+    return "Fetched from all remotes."
+
+
+def pull(repo: git.Repo) -> str:
+    """Pull the current branch from its upstream.
+
+    If the user has set ``pull.rebase`` or ``pull.ff`` we respect it;
+    otherwise we fast-forward when possible and merge when the branches
+    have diverged (like GitKraken's default).
+    """
+    _require_remote(repo)
+    branch = _current_branch(repo)
+    upstream = _upstream(repo, branch)
+    if upstream is None:
+        raise GitError(f"Branch '{branch}' has no upstream yet, so there is nothing to pull. "
+                       "Push it first to create it on the remote.")
+    configured = _config(repo, "pull.rebase") is not None or _config(repo, "pull.ff") is not None
+    args = [] if configured else ["--no-rebase"]
+    before = _head_sha(repo)
+    _run(repo.git.pull, *args, **_network_kwargs(repo))
+    after = _head_sha(repo)
+    if before == after:
+        return f"Already up to date with {upstream}."
+    count = int(repo.git.rev_list("--count", f"{before}..{after}")) if before else 0
+    return f"Pulled {count} new commit{'s' if count != 1 else ''} from {upstream}."
+
+
+def push(repo: git.Repo, force: bool = False) -> str:
+    """Push the current branch. Creates the upstream on first push.
+
+    ``force`` always means ``--force-with-lease`` (never plain ``--force``).
+    """
+    _require_remote(repo)
+    branch = _current_branch(repo)
+    if not _has_head(repo):
+        raise GitError("There are no commits to push yet.")
+    args = ["--force-with-lease"] if force else []
+    upstream = _upstream(repo, branch)
+    if upstream is None:
+        names = [r.name for r in repo.remotes]
+        remote = "origin" if "origin" in names else (names[0] if len(names) == 1 else None)
+        if remote is None:
+            raise GitError(f"Branch '{branch}' has no upstream and this repo has several "
+                           "remotes but none called 'origin'. Push once from a terminal "
+                           f"with `git push -u <remote> {branch}`.")
+        args += ["-u", remote, branch]
+    _run(repo.git.push, "--porcelain", *args, **_network_kwargs(repo))
+    target = _upstream(repo, branch) or branch
+    return f"{'Force pushed' if force else 'Pushed'} {branch} to {target}."

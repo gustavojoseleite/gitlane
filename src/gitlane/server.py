@@ -68,8 +68,8 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
             repo.close()
 
     def status_response(error: str | None = None, notice: str | None = None,
-                        events: tuple[str, ...] = ()) -> HTMLResponse:
-        html = render_status(with_repo(get_status), error=error, notice=notice)
+                        events: tuple[str, ...] = (), hint: str | None = None) -> HTMLResponse:
+        html = render_status(with_repo(get_status), error=error, notice=notice, hint=hint)
         headers = {"HX-Trigger": ", ".join(events)} if events else {}
         return HTMLResponse(html, headers=headers)
 
@@ -78,7 +78,8 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
         try:
             result = with_repo(fn, *args)
         except (GitError, NotAGitRepo) as e:
-            return status_response(error=str(e), events=("gitlane:changed",))
+            return status_response(error=str(e), hint=getattr(e, "hint", None),
+                                   events=("gitlane:changed",))
         if callable(notice):
             notice = notice(result)
         return status_response(notice=notice, events=("gitlane:changed", *extra_events))
@@ -143,6 +144,22 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
                                 notice=lambda sha: f"Committed {sha}.",
                                 extra_events=("gitlane:committed",))
 
+    @app.post("/actions/fetch", response_class=HTMLResponse)
+    async def action_fetch() -> HTMLResponse:
+        return await run_action(git_ops.fetch, notice=lambda msg: msg)
+
+    @app.post("/actions/pull", response_class=HTMLResponse)
+    async def action_pull() -> HTMLResponse:
+        return await run_action(git_ops.pull, notice=lambda msg: msg)
+
+    @app.post("/actions/push", response_class=HTMLResponse)
+    async def action_push() -> HTMLResponse:
+        return await run_action(git_ops.push, notice=lambda msg: msg)
+
+    @app.post("/actions/force-push", response_class=HTMLResponse)
+    async def action_force_push() -> HTMLResponse:
+        return await run_action(git_ops.push, True, notice=lambda msg: msg)
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
 
@@ -182,7 +199,8 @@ def _post(url: str, vals: dict | None = None, confirm: str | None = None,
     return f'<button type="button" class="{css}" {attrs}>{escape(label)}</button>'
 
 
-def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None) -> str:
+def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None,
+                  hint: str | None = None) -> str:
     if s.branch:
         head = f'<span class="branch">{escape(s.branch)}</span>'
     elif s.detached:
@@ -203,13 +221,14 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         sync = ""
 
     parts = [
-        f'<div class="banner error" role="alert">{escape(error)}</div>' if error else "",
+        _error_banner(error, hint) if error else "",
         f'<div class="banner notice" role="status">{escape(notice)}</div>' if notice else "",
         '<section class="repo">',
         f'<h1>{escape(s.name)}</h1>',
         f'<p class="path">{escape(s.root)}</p>',
         f'<p>{head} {commit}</p>',
         f'<p class="sync">{sync}</p>' if sync else "",
+        _sync_toolbar(s),
         "</section>",
     ]
     if s.clean:
@@ -222,6 +241,40 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
             _file_list("Untracked", s.untracked, "untracked"),
         ]
     return "\n".join(p for p in parts if p)
+
+
+def _error_banner(error: str, hint: str | None) -> str:
+    if hint:
+        return (f'<div class="banner error" role="alert"><strong>{escape(hint)}</strong>'
+                f'<details><summary>Git said</summary><pre>{escape(error)}</pre></details></div>')
+    return f'<div class="banner error" role="alert">{escape(error)}</div>'
+
+
+def _sync_toolbar(s: RepoStatus) -> str:
+    def btn(url: str, label: str, title: str, css: str = "", confirm: str | None = None) -> str:
+        extra = f' hx-confirm="{_attr(confirm)}"' if confirm else ""
+        return (f'<button type="button" class="{css}" hx-post="{url}" hx-target="#status" '
+                f'hx-disabled-elt=".sync-bar button" title="{_attr(title)}"{extra}>{label}</button>')
+
+    pull_label = f"Pull ↓{s.behind}" if s.behind else "Pull"
+    push_label = f"Push ↑{s.ahead}" if s.ahead else "Push"
+    buttons = [
+        btn("/actions/fetch", "Fetch", "Download new commits from all remotes without changing your files"),
+        btn("/actions/pull", pull_label, "Fetch and bring the upstream's new commits into this branch"),
+        btn("/actions/push", push_label, "Upload this branch's commits to the remote",
+            css="primary" if s.ahead and not s.behind else ""),
+    ]
+    if s.ahead and s.behind:  # diverged: the only case where force push makes sense
+        buttons.append(btn(
+            "/actions/force-push", "Force push", "Overwrite the remote branch (uses --force-with-lease)",
+            css="danger",
+            confirm=(f"Force push {s.branch} to {s.upstream}?\n\n"
+                     f"The remote's {s.behind} commit(s) that you don't have will be removed "
+                     "from the branch. Only do this if you rewrote your own history (amend/rebase).\n\n"
+                     "gitlane uses --force-with-lease, so it stops if the remote changed "
+                     "since your last fetch."),
+        ))
+    return f'<div class="sync-bar">{"".join(buttons)}<span class="spinner" aria-hidden="true"></span></div>'
 
 
 def _file_list(title: str, files: list[FileChange], kind: str) -> str:

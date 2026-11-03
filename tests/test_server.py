@@ -195,3 +195,50 @@ def test_diff_partial_escapes_html(client):
 def test_diff_partial_bad_path(client):
     html = client.get("/partials/diff", params={"path": "/etc/passwd"}).text
     assert 'class="error"' in html
+
+
+# --- milestone 3: sync --------------------------------------------------------
+
+@pytest.mark.parametrize("path", ["/actions/fetch", "/actions/pull", "/actions/push", "/actions/force-push"])
+def test_sync_actions_require_cookie(anon, path):
+    assert anon.post(path).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/actions/fetch", "/actions/pull", "/actions/push", "/actions/force-push"])
+def test_sync_actions_reject_get(client, path):
+    assert client.get(path).status_code == 405
+
+
+def test_sync_toolbar_and_error_hint_without_remote(client):
+    html = client.get("/partials/status").text
+    assert "/actions/fetch" in html and "/actions/pull" in html and "/actions/push" in html
+    assert "/actions/force-push" not in html  # only shown when diverged
+    r = client.post("/actions/push")
+    assert 'class="banner error"' in r.text and "no remote" in r.text
+
+
+def test_force_push_button_only_when_diverged(tmp_path, make_repo):
+    from .conftest import run
+    path = make_repo("diverged")
+    run(tmp_path, "init", "-q", "--bare", "r.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "r.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    (path / "a").write_text("a")
+    run(path, "add", "a")
+    run(path, "commit", "-q", "-m", "a")
+    run(path, "push", "-q")
+    run(path, "commit", "-q", "--amend", "-m", "amended")  # now ahead 1, behind 1
+    c = TestClient(create_app(path, TOKEN, PORT), base_url=BASE, follow_redirects=False)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert "/actions/force-push" in html and "hx-confirm" in html and "force-with-lease" in html
+    r = c.post("/actions/force-push")
+    assert "Force pushed main to origin/main." in r.text
+
+
+def test_hint_banner_shows_git_output(client, repo_path):
+    from .conftest import run
+    run(repo_path, "remote", "add", "origin", "/nonexistent/repo.git")
+    run(repo_path, "branch", "--set-upstream-to", "main")  # any upstream so pull runs
+    r = client.post("/actions/fetch")
+    assert "<details>" in r.text and "Git said" in r.text
