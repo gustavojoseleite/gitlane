@@ -76,8 +76,13 @@ def notice(page):
     return page.wait_for_selector(".banner.notice, .banner.error").inner_text()
 
 
-def accept_dialogs(page, answer=None):
-    page.on("dialog", lambda d: d.accept(answer) if answer is not None else d.accept())
+def answer_modal(page, answer=None, accept=True):
+    """Answer gitlane's own dialog (confirmations and questions)."""
+    page.wait_for_selector("#modal[open]")
+    if answer is not None:
+        page.fill("#modal-input", answer)
+    page.click("#modal-ok" if accept else "#modal-cancel")
+    page.wait_for_selector("#modal", state="hidden")
 
 
 # ------------------------------------------------------------------------------
@@ -85,7 +90,7 @@ def accept_dialogs(page, answer=None):
 def test_page_loads_status_and_graph(make_repo, open_page):
     path = make_repo()
     page = open_page(path)
-    assert page.inner_text("#tabs .tab.active .tab-name") == path.name
+    assert page.inner_text("#tabs .tab.active .tab-label") == path.name
     assert page.inner_text("#toolbar .branch") == "main"
     assert page.locator("#graph .row").count() == 1
     assert "Initial commit" in page.inner_text("#graph")
@@ -148,10 +153,10 @@ def test_image_preview_loads(make_repo, open_page):
 def test_context_menu_create_branch(make_repo, open_page):
     path = make_repo()
     page = open_page(path)
-    accept_dialogs(page, "from-menu")
     page.click("#graph .row >> nth=0", button="right")
     page.wait_for_selector("#ctx-menu:not([hidden])")
     page.click("#ctx-menu button:has-text('Create branch here')")
+    answer_modal(page, "from-menu")
     assert "Created branch from-menu" in notice(page)
     assert run(path, "branch", "--show-current") == "from-menu"
     page.wait_for_selector("#graph .ref[data-ref-name='from-menu']")  # graph reloaded
@@ -171,9 +176,9 @@ def test_branch_label_menu_merge(make_repo, open_page):
     run(path, "commit", "-q", "--allow-empty", "-m", "feature work")
     run(path, "checkout", "-q", "main")
     page = open_page(path)
-    accept_dialogs(page)
     page.click("#graph .ref[data-ref-name='feature']", button="right")
     page.click("#ctx-menu button:has-text('Merge feature into main')")
+    answer_modal(page)
     assert "Merged feature into main" in notice(page)
     assert run(path, "log", "-1", "--format=%s") == "feature work"
 
@@ -196,12 +201,13 @@ def test_conflict_box_abort(make_repo, open_page):
     (path / "README.md").write_text("main\n")
     run(path, "commit", "-q", "-am", "main")
     page = open_page(path)
-    accept_dialogs(page)
     page.click("#graph .ref[data-ref-name='feature']", button="right")
     page.click("#ctx-menu button:has-text('Merge feature into main')")
+    answer_modal(page)
     page.wait_for_selector("#status .operation")
     assert "1 file with conflicts" in page.inner_text("#status .operation")
     page.click("#status .operation button:has-text('Abort merge')")
+    answer_modal(page)
     assert "Merge aborted" in page.wait_for_selector(".banner.notice").inner_text()
     assert page.locator("#status .operation").count() == 0
     assert (path / "README.md").read_text() == "main\n"
@@ -298,8 +304,8 @@ def test_dates_not_cut_off(make_repo, open_page):
 def test_new_branch_button_keeps_name_intact(make_repo, open_page):
     path = make_repo()
     page = open_page(path)
-    accept_dialogs(page, "feature/ação→nova")
     page.click("#toolbar button:has-text('New branch')")
+    answer_modal(page, "feature/ação→nova")
     assert "Created branch feature/ação→nova" in notice(page)
     assert run(path, "branch", "--show-current") == "feature/ação→nova"
 
@@ -311,8 +317,8 @@ def test_stash_save_view_and_pop(make_repo, open_page):
     (path / "README.md").write_text("work in progress\n")
     (path / "novo.txt").write_text("untracked")
     page = open_page(path)
-    accept_dialogs(page, "login pela metade → ação")
     page.click("#toolbar button:has-text('Stash changes')")
+    answer_modal(page, "login pela metade → ação")
     assert "Stashed your changes" in notice(page)
     assert "login pela metade → ação" in page.inner_text("#status .stashes")
     assert page.locator("#status .clean").count() == 1
@@ -334,13 +340,16 @@ def test_stash_drop_needs_confirmation(make_repo, open_page):
     path = make_repo()
     (path / "README.md").write_text("x\n")
     page = open_page(path)
-    answers = iter(["keep me", None])  # prompt answer, then dismiss the confirm
-    page.on("dialog", lambda d: d.accept(next(answers)) if d.type == "prompt" else d.dismiss())
     page.click("#toolbar button:has-text('Stash changes')")
+    answer_modal(page, "keep me")
     page.wait_for_selector("#status .stash-item")
     item = page.locator("#status .stash-item")
     item.hover()
     item.get_by_role("button", name="Drop").click()
+    page.wait_for_selector("#modal[open].danger")  # red, and Cancel has the focus
+    assert page.evaluate("document.activeElement.id") == "modal-cancel"
+    assert page.inner_text("#modal-ok") == "Delete"
+    answer_modal(page, accept=False)
     page.wait_for_timeout(300)
     assert "keep me" in run(path, "stash", "list")  # dismissed -> still there
 
@@ -349,8 +358,8 @@ def test_stash_in_graph_click_and_menu(make_repo, open_page):
     path = make_repo()
     (path / "README.md").write_text("wip\n")
     page = open_page(path)
-    accept_dialogs(page, "from the graph")
     page.click("#toolbar button:has-text('Stash changes')")
+    answer_modal(page, "from the graph")
     row = page.wait_for_selector("#graph .row.stash-row")  # graph reloads by itself
     assert "stash@{0}" in row.inner_text() and "from the graph" in row.inner_text()
     row.click()
@@ -391,11 +400,11 @@ def test_row_buttons_never_cover_the_name(make_repo, open_page):
 # --- tabs & repo picker (milestone 7) ------------------------------------------
 
 def tab_names(page):
-    return page.locator("#tabs .tab-name").all_inner_texts()
+    return page.locator("#tabs .tab-label").all_inner_texts()
 
 
 def active_tab(page):
-    return page.inner_text("#tabs .tab.active .tab-name")
+    return page.inner_text("#tabs .tab.active .tab-label")
 
 
 def test_start_without_repo_shows_picker(open_page, make_repo, tmp_path, monkeypatch):
@@ -481,12 +490,15 @@ def test_tabs_remembered_after_reload(make_repo, open_page):
 
 def test_commit_draft_kept_per_tab(make_repo, open_page):
     a, b = make_repo("alpha"), make_repo("beta")
+    (a / "README.md").write_text("staged\n")
+    run(a, "add", "README.md")
     page = open_page(a)
     page.fill("#summary", "alpha message")
     page.click("#tabs .tab-new")
     page.fill("#open-path", str(b))
     page.press("#open-path", "Enter")
     page.wait_for_function("document.title === 'beta — gitlane'")
+    page.wait_for_selector("#commit-hint", state="visible")  # nothing staged in beta
     assert page.input_value("#summary") == ""
     page.click("#tabs .tab-name:has-text('alpha')")
     page.wait_for_function("document.title === 'alpha — gitlane'")
@@ -527,3 +539,178 @@ def test_slow_answer_for_old_tab_neither_blocks_nor_lands(make_repo, open_page):
     assert page.locator("#status .clean").count() == 1
     assert "beta-only.txt" not in page.inner_text("#status")
     assert page.inner_text("#toolbar .branch") == "main" and active_tab(page) == "alpha"
+
+
+
+# --- dialog & page size ---------------------------------------------------------
+
+def test_dialog_keyboard_and_required_name(make_repo, open_page):
+    path = make_repo()
+    page = open_page(path)
+    page.click("#toolbar button:has-text('New branch')")
+    page.wait_for_selector("#modal[open]")
+    assert page.inner_text("#modal-title") == "New branch"
+    assert page.inner_text("#modal-ok") == "Create branch"
+    assert page.evaluate("document.activeElement.id") == "modal-input"
+    page.keyboard.press("Enter")  # empty name: stays open with a message
+    assert page.is_visible("#modal-error") and page.locator("#modal[open]").count() == 1
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#modal", state="hidden")
+    assert run(path, "branch", "--format=%(refname:short)") == "main"
+    page.click("#toolbar button:has-text('New branch')")
+    page.fill("#modal-input", "via-enter")
+    page.keyboard.press("Enter")
+    assert "Created branch via-enter" in notice(page)
+
+
+def test_discard_confirm_uses_dialog(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("changed\n")
+    page = open_page(path)
+    row = page.locator("#status .files.unstaged li").first
+    row.hover()
+    row.get_by_role("button", name="Discard changes").click()
+    page.wait_for_selector("#modal[open].danger")
+    assert page.inner_text("#modal-title") == "Discard your changes to README.md?"
+    assert "cannot be undone" in page.inner_text("#modal-text")
+    assert page.inner_text("#modal-ok") == "Discard"
+    answer_modal(page)
+    page.wait_for_selector("#status .clean")
+    assert (path / "README.md").read_text() == "hello\n"
+
+
+@pytest.mark.parametrize("size", [(1280, 720), (1000, 640), (700, 600)])
+def test_page_never_scrolls(make_repo, browser, serve, size):
+    path = make_repo()
+    for i in range(80):
+        (path / f"f{i:02}.txt").write_text("x")
+        run(path, "add", f"f{i:02}.txt")
+        run(path, "commit", "-q", "-m", f"commit {i} with a fairly long subject line to fill the row")
+    for i in range(30):
+        (path / f"u{i:02}.txt").write_text("x")
+    run(path, "add", "u00.txt")  # something staged, so the commit box is shown
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    page = ctx.new_page()
+    page.goto(f"{serve(path)}/?token={TOKEN}")
+    page.wait_for_selector("#graph .row")
+    page.click("#graph .row >> nth=1")
+    page.wait_for_selector("#detail .commit-detail")
+    height = page.evaluate("document.documentElement.scrollHeight")
+    assert height <= size[1]  # only the panels scroll, never the page
+    assert page.locator("#commit-form button[type=submit]").is_visible()
+    ctx.close()
+
+
+# --- header & about -------------------------------------------------------------
+
+def test_many_tabs_shrink_without_scrollbar(make_repo, open_page):
+    paths = [make_repo(f"project-with-a-long-name-{i}") for i in range(12)]
+    page = open_page(paths[0])
+    for p in paths[1:]:
+        page.click("#tabs .tab-new")
+        page.fill("#open-path", str(p))
+        page.press("#open-path", "Enter")
+        page.wait_for_function(f"document.title.startsWith({p.name!r})")
+    tabs = page.locator("#tabs")
+    assert tabs.evaluate("el => el.scrollWidth <= el.clientWidth")  # nothing hidden behind a scroll
+    assert tabs.evaluate("el => getComputedStyle(el).overflowX") == "hidden"
+    assert page.locator("#tabs .tab-new").is_visible() and page.locator("#about-btn").is_visible()
+    badge = page.locator("#tabs .tab.active .repo-badge")
+    assert badge.inner_text() == "P"
+
+
+def test_about_window(make_repo, open_page):
+    from gitlane import __version__
+    page = open_page(make_repo())
+    page.click("#about-btn")
+    page.wait_for_selector("#about[open]")
+    text = page.inner_text("#about")
+    assert "MIT License" in text and "Gustavo Leite" in text and __version__ in text
+    assert "contribute on github" in text.lower() and "pull request" in text
+    link = page.locator("#about a:has-text('Repository')")
+    assert link.get_attribute("href") == "https://github.com/gustavojoseleite/gitlane"
+    assert link.get_attribute("target") == "_blank" and "noopener" in link.get_attribute("rel")
+    page.click("#about summary")
+    assert "THE SOFTWARE IS PROVIDED" in page.inner_text("#about pre.license")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#about", state="hidden")
+
+
+
+# --- commit box & remote branches ----------------------------------------------------
+
+def test_commit_box_only_when_something_is_staged(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("changed\n")
+    page = open_page(path)
+    page.wait_for_selector("#commit-hint", state="visible")
+    assert page.locator("#commit-form").is_hidden()
+    page.click("#status .unstaged h2 button:has-text('Stage all')")
+    page.wait_for_selector("#commit-form", state="visible")
+    assert page.locator("#commit-hint").is_hidden()
+    page.fill("#summary", "draft")
+    page.click("#status .staged h2 button:has-text('Unstage all')")
+    page.wait_for_selector("#commit-form button[type=submit]:disabled")
+    # a typed message never disappears; it just can't be committed yet
+    assert page.locator("#commit-form").is_visible()
+
+
+def test_delete_remote_branch_from_graph_menu(make_repo, open_page, tmp_path):
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    run(path, "push", "-q", "origin", "main:old-feature")
+    run(path, "fetch", "-q")
+    page = open_page(path)
+    page.click("#graph .ref[data-ref-name='origin/old-feature']", button="right")
+    page.click("#ctx-menu button:has-text('Delete old-feature on origin')")
+    page.wait_for_selector("#modal[open].danger")
+    assert page.inner_text("#modal-title") == "Delete old-feature on origin?"
+    answer_modal(page)
+    assert "Deleted old-feature on origin." in notice(page)
+    assert run(tmp_path / "server.git", "branch", "--format=%(refname:short)") == "main"
+    page.wait_for_selector("#graph .ref[data-ref-name='origin/old-feature']", state="detached")
+
+
+def test_delete_remote_branch_from_sidebar(make_repo, open_page, tmp_path):
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    run(path, "push", "-q", "origin", "main:gone-soon")
+    run(path, "fetch", "-q")
+    page = open_page(path)
+    page.click("#remote-branches summary")
+    row = page.locator("#remote-branches li", has_text="origin/gone-soon")
+    row.hover()
+    row.get_by_role("button", name="Delete on the remote").click()
+    answer_modal(page, accept=False)  # cancelled: nothing happens
+    assert "gone-soon" in run(tmp_path / "server.git", "branch", "--format=%(refname:short)")
+    row.hover()
+    row.get_by_role("button", name="Delete on the remote").click()
+    answer_modal(page)
+    assert "Deleted gone-soon on origin." in notice(page)
+
+
+def test_minimize_sections(make_repo, open_page):
+    path = make_repo()
+    for i in range(20):
+        (path / f"untracked{i:02}.txt").write_text("x")
+    page = open_page(path)
+    untracked = page.locator("#status section.untracked")
+    assert "collapsed" in untracked.get_attribute("class")  # 20 files: minimized by default
+    assert untracked.locator("ul").is_hidden()
+    assert untracked.locator("h2 button:has-text('Stage all')").is_visible()  # still usable
+    untracked.locator(".sec-toggle").click()
+    assert untracked.locator("ul").is_visible()
+    branches = page.locator("#status section.branches")
+    branches.locator(".sec-toggle").click()  # short list, minimized by hand
+    assert branches.locator("ul").is_hidden()
+    assert branches.locator(".sec-toggle").get_attribute("aria-expanded") == "false"
+    page.click("#refresh")  # choices survive refreshes and reloads
+    page.wait_for_timeout(300)
+    page.reload()
+    page.wait_for_selector("#status section.untracked")
+    assert page.locator("#status section.untracked ul").is_visible()
+    assert page.locator("#status section.branches ul").is_hidden()

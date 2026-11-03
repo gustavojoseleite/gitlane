@@ -550,3 +550,58 @@ def test_stash_drop_has_confirm(client, repo_path):
 def test_stale_stash_detail(client):
     html = client.get(f"/partials/stash?index=0&sha={'a' * 40}").text
     assert 'class="error"' in html and "changed" in html
+
+
+# --- commit message display --------------------------------------------------------
+
+def test_reflow_joins_hard_wrapped_paragraphs():
+    from gitlane.server import reflow
+    body = ("The cover image was cut on phones because the\nhero is almost square.\n\n"
+            "- first item\n- second item\n\n"
+            "    code stays\n    as is\n\n"
+            "Co-Authored-By: A <a@x>\nSigned-off-by: B <b@x>")
+    assert reflow(body) == (
+        "The cover image was cut on phones because the hero is almost square.\n\n"
+        "- first item\n- second item\n\n"
+        "    code stays\n    as is\n\n"
+        "Co-Authored-By: A <a@x>\nSigned-off-by: B <b@x>")
+
+
+def test_avatar_initials_and_stable_color():
+    from gitlane.server import _avatar
+    assert ">GL<" in _avatar("Gustavo Leite", "g@x") and ">A<" in _avatar("alice", "a@x")
+    assert ">?<" in _avatar("", "") and _avatar("X Y", "same@x") == _avatar("X Y", "same@x")
+    assert "&lt;" in _avatar("<b> c", "x") or ">C<" in _avatar("<b> c", "x")
+
+
+
+def test_delete_remote_endpoint_and_button(make_repo, tmp_path):
+    from .conftest import run
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    run(path, "push", "-q", "origin", "main:tmp")
+    run(path, "fetch", "-q")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert 'hx-post="/actions/branch/delete-remote"' in html and "Delete tmp on origin?" in html
+    assert 'data-staged="0"' in html
+    r = c.post("/actions/branch/delete-remote", data={"name": "origin/tmp"})
+    assert "Deleted tmp on origin." in r.text
+    assert c.get("/actions/branch/delete-remote").status_code == 405
+
+
+def test_long_lists_start_minimized(make_repo):
+    path = make_repo()
+    for i in range(16):
+        (path / f"u{i}.txt").write_text("x")
+    (path / "README.md").write_text("changed\n")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert 'data-section="untracked" data-auto-collapse="1"' in html  # 16 > 15
+    assert 'data-section="unstaged" data-auto-collapse="0"' in html  # changes are never auto-hidden
+    assert 'data-section="branches" data-auto-collapse="0"' in html
+    assert html.count('class="sec-toggle"') == 3

@@ -306,3 +306,53 @@ def test_reset_bad_mode(repo):
 def test_editor_never_opened(repo):
     env = repo.git._environment
     assert env["GIT_EDITOR"] == "true" and env["GIT_MERGE_AUTOEDIT"] == "no"
+
+
+# --- remote branches ------------------------------------------------------------------
+
+@pytest.fixture
+def with_remote(repo, tmp_path):
+    """repo with an 'origin' (local bare repo) holding main and feature/x."""
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(root(repo), "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(root(repo), "push", "-q", "-u", "origin", "main")
+    run(root(repo), "push", "-q", "origin", "main:feature/x")
+    run(tmp_path / "server.git", "symbolic-ref", "HEAD", "refs/heads/main")
+    run(root(repo), "remote", "set-head", "origin", "main")
+    run(root(repo), "fetch", "-q")
+    return tmp_path / "server.git"
+
+
+def test_delete_remote_branch(repo, with_remote):
+    assert branches.delete_remote_branch(repo, "origin/feature/x") == "Deleted feature/x on origin."
+    assert run(with_remote, "branch", "--format=%(refname:short)") == "main"
+    assert branches.list_branches(repo)[1] == ["origin/main"]
+
+
+def test_delete_remote_keeps_local_branch(repo, with_remote):
+    branches.checkout(repo, "origin/feature/x")  # local feature/x tracking it
+    run(root(repo), "checkout", "-q", "main")
+    msg = branches.delete_remote_branch(repo, "origin/feature/x")
+    assert "Your local branch feature/x is kept" in msg
+    assert "feature/x" in [b.name for b in branches.list_branches(repo)[0]]
+
+
+def test_delete_remote_default_branch_refused(repo, with_remote):
+    with pytest.raises(GitError, match="default branch") as e:
+        branches.delete_remote_branch(repo, "origin/main")
+    assert "settings" in e.value.hint
+    assert "main" in run(with_remote, "branch", "--format=%(refname:short)")
+
+
+def test_delete_remote_already_gone(repo, with_remote):
+    run(with_remote, "branch", "-D", "feature/x")  # deleted by someone else, we didn't fetch
+    msg = branches.delete_remote_branch(repo, "origin/feature/x")
+    assert "already gone" in msg
+    assert branches.list_branches(repo)[1] == ["origin/main"]
+
+
+@pytest.mark.parametrize("bad", ["origin/nope", "feature/x", "", "--all", "elsewhere/main"])
+def test_delete_remote_unknown(repo, with_remote, bad):
+    with pytest.raises(GitError, match="not found"):
+        branches.delete_remote_branch(repo, bad)
+    assert "feature/x" in run(with_remote, "branch", "--format=%(refname:short)")

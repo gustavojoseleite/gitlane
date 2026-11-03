@@ -9,12 +9,31 @@
 </head>
 <body>
   <header>
-    <span class="logo">gitlane</span>
+    <span class="logo">
+      <span class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.6"
+             stroke-linecap="round">
+          <path d="M7 4v16"/><path d="M7 15c0-4 10-3 10-8V4" opacity=".85"/>
+          <circle cx="7" cy="20" r="2.2" fill="#fff" stroke="none"/>
+          <circle cx="17" cy="4" r="2.2" fill="#fff" stroke="none"/>
+        </svg>
+      </span>
+      <span class="logo-word">git<b>lane</b></span>
+    </span>
     <nav id="tabs" class="tabs" aria-label="Open repositories"></nav>
+    <button id="about-btn" type="button" class="about-btn" title="About gitlane" aria-haspopup="dialog">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5v.5"/></svg>
+      <span>About</span>
+    </button>
   </header>
   <div id="toolbar-row" class="toolbar-row" hidden>
     <div id="toolbar" class="toolbar"></div>
-    <button id="refresh" type="button" title="Refresh (R)">Refresh</button>
+    <button id="refresh" type="button" class="tb-btn" title="Refresh (R)">
+      <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg><span>Refresh</span></button>
   </div>
   <div id="picker" class="picker" hidden></div>
   <div class="layout" hidden>
@@ -22,8 +41,9 @@
       <div id="status" hx-get="/partials/status" hx-trigger="gitlane:refresh from:body">
         <p class="muted">Loading…</p>
       </div>
-      <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status">
-        <label for="summary">Commit</label>
+      <p id="commit-hint" class="commit-hint" hidden>Stage files to write a commit.</p>
+      <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status" hidden>
+        <label for="summary">Commit message</label>
         <div class="summary-row">
           <input type="text" id="summary" name="summary" autocomplete="off"
                  placeholder="Summary (required)" aria-describedby="summary-count">
@@ -31,13 +51,19 @@
         </div>
         <textarea id="description" name="description" rows="4"
                   placeholder="Description (optional)"></textarea>
-        <button type="submit" class="primary">Commit staged changes</button>
-        <span class="hint">Ctrl+Enter</span>
+        <div class="commit-actions">
+          <button type="submit" class="primary">Commit staged changes</button>
+          <kbd class="hint">Ctrl ↵</kbd>
+        </div>
       </form>
     </aside>
     <div id="g1" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-label="Resize sidebar" title="Drag to resize · double-click to reset"></div>
     <main class="graph-panel">
+      <div class="graph-head" aria-hidden="true">
+        <span></span><span>Description</span><span class="author">Author</span>
+        <span class="date">Date</span><span class="sha">Commit</span>
+      </div>
       <div id="graph">
         <p class="muted">Loading history…</p>
       </div>
@@ -45,10 +71,102 @@
     <div id="g2" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-label="Resize details panel" title="Drag to resize · double-click to reset"></div>
     <section id="detail" class="detail-panel">
-      <p class="muted">Click a commit or a file to see its details.</p>
+      <p class="muted empty-state">Click a commit or a file to see its details.</p>
     </section>
   </div>
   <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
+  <dialog id="about" class="modal about" aria-labelledby="about-title">
+    <div class="about-body">
+      <button type="button" class="about-close" aria-label="Close" data-close>×</button>
+      <div class="about-hero">
+        <span class="logo-mark big" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="2.6"
+               stroke-linecap="round">
+            <path d="M7 4v16"/><path d="M7 15c0-4 10-3 10-8V4" opacity=".85"/>
+            <circle cx="7" cy="20" r="2.2" fill="#fff" stroke="none"/>
+            <circle cx="17" cy="4" r="2.2" fill="#fff" stroke="none"/>
+          </svg>
+        </span>
+        <div>
+          <h2 id="about-title" class="logo-word">git<b>lane</b></h2>
+          <p class="muted">A free, open-source Git client that runs in your browser.
+            <span class="version">Version {{VERSION}}</span></p>
+        </div>
+      </div>
+
+      <section>
+        <h3>License</h3>
+        <p><strong>MIT License</strong> — you can use gitlane for free, for personal or commercial work,
+          and copy, change and share it. Keep the copyright notice when you share it.
+          It comes with no warranty.</p>
+        <details>
+          <summary>Read the full license</summary>
+          <pre class="license">MIT License
+
+Copyright (c) 2026 Gustavo Leite
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+        </details>
+      </section>
+
+      <section>
+        <h3>Contribute on GitHub</h3>
+        <ol class="steps">
+          <li><strong>Fork</strong> the repository on GitHub and clone your fork.</li>
+          <li>Set it up: <code>python3 -m venv .venv &amp;&amp; .venv/bin/pip install -e ".[dev,e2e]"</code></li>
+          <li>Make your change with tests, and run <code>.venv/bin/pytest</code></li>
+          <li>Open a <strong>pull request</strong>. Bugs and ideas are welcome as <strong>issues</strong>.</li>
+        </ol>
+        <div class="about-links">
+          <a class="link-btn" href="https://github.com/gustavojoseleite/gitlane" target="_blank" rel="noopener noreferrer">
+            <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="currentColor">
+              <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>
+            Repository</a>
+          <a class="link-btn" href="https://github.com/gustavojoseleite/gitlane/issues" target="_blank" rel="noopener noreferrer">Report a bug</a>
+        </div>
+      </section>
+
+      <section>
+        <h3>Author</h3>
+        <div class="author-card">
+          <span class="avatar a0 lg" aria-hidden="true">GL</span>
+          <div><strong>Gustavo Leite</strong><br>
+            <a href="https://github.com/gustavojoseleite" target="_blank" rel="noopener noreferrer">github.com/gustavojoseleite</a></div>
+        </div>
+      </section>
+    </div>
+  </dialog>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title" aria-describedby="modal-text">
+    <form method="dialog" id="modal-form">
+      <div class="modal-head">
+        <span class="modal-icon" aria-hidden="true"></span>
+        <h2 id="modal-title"></h2>
+      </div>
+      <p id="modal-text"></p>
+      <input id="modal-input" type="text" autocomplete="off" spellcheck="false" hidden>
+      <p id="modal-error" class="modal-error" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="submit" value="ok" id="modal-ok" class="primary">OK</button>
+        <button type="submit" value="cancel" id="modal-cancel" formnovalidate>Cancel</button>
+      </div>
+    </form>
+  </dialog>
   <script>
     (() => {
       const graphEl = document.getElementById("graph");
@@ -62,7 +180,7 @@
         counter.classList.toggle("long", n > 72);
       };
       summary.addEventListener("input", updateCounter);
-      const EMPTY_DETAIL = '<p class="muted">Click a commit or a file to see its details.</p>';
+      const EMPTY_DETAIL = '<p class="muted empty-state">Click a commit or a file to see its details.</p>';
       let currentDetail = null;  // URL shown in the detail panel
       let selectedSha = null;
       let refsVersion = null;
@@ -125,6 +243,9 @@
         for (const el of [statusEl, graphEl, detail, picker]) htmx.trigger(el, "htmx:abort");
       };
 
+      // Same repo -> same color in every session.
+      const hashOf = (text) => [...text].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) >>> 0, 7);
+
       const renderTabs = () => {
         tabsEl.innerHTML = "";
         const counts = {};
@@ -138,7 +259,15 @@
           name.className = "tab-name";
           name.title = t.path;
           // Two repos with the same folder name: add the parent folder.
-          name.textContent = counts[t.name] > 1 ? `${t.name} (${t.path.split("/").slice(-2, -1)[0] || "/"})` : t.name;
+          const label = document.createElement("span");
+          label.className = "tab-label";
+          label.textContent = counts[t.name] > 1 ? `${t.name} (${t.path.split("/").slice(-2, -1)[0] || "/"})` : t.name;
+          name.append(label);
+          const mark = document.createElement("span");
+          mark.className = `repo-badge a${hashOf(t.path) % 8}`;
+          mark.setAttribute("aria-hidden", "true");
+          mark.textContent = (t.name.match(/[\p{L}\p{N}]/u) || ["?"])[0].toUpperCase();
+          name.prepend(mark);
           if (t.id === activeRepo && picker.hidden) name.setAttribute("aria-current", "page");
           name.addEventListener("click", () => activate(t.id));
           const close = document.createElement("button");
@@ -182,7 +311,11 @@
         currentDetail = null;
         refsVersion = null;
         detail.innerHTML = EMPTY_DETAIL;
-        document.getElementById("toolbar").innerHTML = "";
+        const tb = document.getElementById("toolbar");
+        tb.innerHTML = "";
+        delete tb.dataset.staged;  // the new tab's status decides the commit box
+        commitForm.hidden = true;
+        commitHint.hidden = true;
         statusEl.innerHTML = '<p class="muted">Loading…</p>';
         graphEl.innerHTML = '<p class="muted">Loading history…</p>';
         document.title = `${tabs.find((t) => t.id === id).name} — gitlane`;
@@ -198,6 +331,7 @@
         layoutEl.hidden = true;
         toolbarRow.hidden = true;
         document.title = "Open a repository — gitlane";
+        picker.innerHTML = "";  // never type into the previous picker while the new one loads
         renderTabs();
         htmx.ajax("GET", "/partials/picker" + (path ? `?path=${encodeURIComponent(path)}` : ""), "#picker");
       };
@@ -322,8 +456,77 @@
       // ---- right-click menus ------------------------------------------------
       const menu = document.getElementById("ctx-menu");
       const currentBranch = () => document.querySelector("#toolbar")?.dataset.branch || "";
-      const post = (url, values, confirmText) => {
-        if (confirmText && !window.confirm(confirmText)) return;
+      // ---- About -------------------------------------------------------------------
+      const about = document.getElementById("about");
+      document.getElementById("about-btn").addEventListener("click", () => about.showModal());
+      about.addEventListener("click", (e) => {
+        if (e.target === about || e.target.closest("[data-close]")) about.close();
+      });
+
+      // ---- dialogs (replace the browser's confirm/prompt boxes) ----------------
+      const modal = document.getElementById("modal");
+      const modalTitle = document.getElementById("modal-title");
+      const modalText = document.getElementById("modal-text");
+      const modalInput = document.getElementById("modal-input");
+      const modalError = document.getElementById("modal-error");
+      const modalOk = document.getElementById("modal-ok");
+      const modalCancel = document.getElementById("modal-cancel");
+
+      // "Delete the branch x?" -> "Delete"; first paragraph is the title, the rest the text.
+      const ACTION_WORDS = { Check: 2, Force: 2, Mark: 1, HARD: 2 };
+      const okLabelFor = (title) => {
+        const words = title.replace(/[?.:…]+$/, "").split(/\s+/);
+        const label = words.slice(0, ACTION_WORDS[words[0]] || 1).join(" ");
+        return label === "HARD reset" ? "Reset" : label;
+      };
+
+      // ask({question, danger, input, value, required, ok}) -> Promise: true/false, or the text/null.
+      const ask = ({ question, danger = false, input = false, value = "", required = false, ok }) =>
+        new Promise((resolve) => {
+          const [title, ...rest] = question.split(/\n\s*\n/);
+          modalTitle.textContent = title.trim();
+          modalText.textContent = rest.join("\n\n").trim();
+          modalText.hidden = !modalText.textContent;
+          modal.classList.toggle("danger", danger);
+          modalOk.className = danger ? "danger-solid" : "primary";
+          modalOk.textContent = ok || (input ? "OK" : okLabelFor(title));
+          modalInput.hidden = !input;
+          modalInput.value = value;
+          modalError.hidden = true;
+          modal.returnValue = "";
+          const done = () => {
+            modal.removeEventListener("close", done);
+            const accepted = modal.returnValue === "ok";
+            resolve(input ? (accepted ? modalInput.value : null) : accepted);
+          };
+          modal.addEventListener("close", done);
+          modal.showModal();
+          if (input) { modalInput.focus(); modalInput.select(); }
+          else (danger ? modalCancel : modalOk).focus();  // a stray Enter never deletes
+          modal.dataset.required = required ? "1" : "";
+        });
+
+      document.getElementById("modal-form").addEventListener("submit", (e) => {
+        if (e.submitter?.value === "ok" && !modalInput.hidden && modal.dataset.required &&
+            !modalInput.value.trim()) {
+          e.preventDefault();
+          modalError.textContent = "This can't be empty.";
+          modalError.hidden = false;
+          modalInput.focus();
+        }
+      });
+      modal.addEventListener("click", (e) => { if (e.target === modal) modal.close("cancel"); });  // backdrop
+
+      // Buttons rendered with hx-confirm use the same dialog.
+      document.body.addEventListener("htmx:confirm", (e) => {
+        if (!e.detail.question) return;
+        e.preventDefault();
+        const danger = e.detail.elt.classList.contains("danger");
+        ask({ question: e.detail.question, danger }).then((yes) => { if (yes) e.detail.issueRequest(true); });
+      });
+
+      const post = async (url, values, confirmText, danger = false) => {
+        if (confirmText && !(await ask({ question: confirmText, danger }))) return;
         htmx.ajax("POST", url, { target: "#status", values });
       };
       const closeMenu = () => { menu.hidden = true; menu.innerHTML = ""; };
@@ -332,9 +535,11 @@
       document.body.addEventListener("click", (e) => {
         const b = e.target.closest("[data-prompt-url]");
         if (!b) return;
-        const answer = window.prompt(b.dataset.prompt, b.dataset.promptDefault || "");
-        if (answer === null) return;  // cancelled
-        post(b.dataset.promptUrl, { [b.dataset.promptField]: answer });
+        const required = b.dataset.promptField === "name";
+        ask({ question: b.dataset.prompt, input: true, value: b.dataset.promptDefault || "", required,
+              ok: b.dataset.promptOk || b.textContent.trim() }).then((answer) => {
+          if (answer !== null) post(b.dataset.promptUrl, { [b.dataset.promptField]: answer });
+        });
       });
 
       const openMenu = (x, y, items) => {
@@ -366,8 +571,9 @@
           { label: `Checkout ${short}`, run: () => post("/actions/commit/checkout", { sha },
               `Check out ${short}?\n\nYou will be in "detached HEAD": new commits won't belong to ` +
               "any branch until you create one.") },
-          { label: "Create branch here…", run: () => {
-              const name = window.prompt(`Name for the new branch at ${short}:`);
+          { label: "Create branch here…", run: async () => {
+              const name = await ask({ question: `New branch at ${short}\n\nName for the branch:`,
+                                       input: true, required: true, ok: "Create branch" });
               if (name) post("/actions/branch/create", { name, start: sha });
           } },
           "-",
@@ -388,7 +594,7 @@
           { label: `Reset ${branch || "HEAD"} here — hard (discard everything)`, danger: true,
             run: () => post("/actions/commit/reset", { sha, mode: "hard" },
               `HARD reset ${branch || "HEAD"} to ${short}?\n\nAll uncommitted changes AND the ` +
-              "commits after it will be thrown away. This cannot be undone from gitlane.") },
+              "commits after it will be thrown away. This cannot be undone from gitlane.", true) },
           "-",
           { label: "Copy commit hash", run: () => navigator.clipboard?.writeText(sha) },
         ];
@@ -402,7 +608,7 @@
           { label: "Pop (apply and delete)", run: () => post("/actions/stash/pop", vals) },
           "-",
           { label: `Drop ${ref}…`, danger: true,
-            run: () => post("/actions/stash/drop", vals, `Delete ${ref}?\n\nIts changes will be lost.`) },
+            run: () => post("/actions/stash/drop", vals, `Delete ${ref}?\n\nIts changes will be lost.`, true) },
         ];
       };
 
@@ -419,14 +625,21 @@
             mergeItem,
             "-",
             { label: `Delete ${name}…`, danger: true,
-              run: () => post("/actions/branch/delete", { name }, `Delete the branch ${name}?`) },
+              run: () => post("/actions/branch/delete", { name }, `Delete the branch ${name}?`, true) },
           ];
         }
         if (kind === "remote") {
+          const slash = name.indexOf("/");
+          const [remote, rbranch] = [name.slice(0, slash), name.slice(slash + 1)];
           return [
             { label: `Checkout ${name} as a local branch`,
               run: () => post("/actions/branch/checkout", { name }) },
             mergeItem,
+            "-",
+            { label: `Delete ${rbranch} on ${remote}…`, danger: true,
+              run: () => post("/actions/branch/delete-remote", { name },
+                `Delete ${rbranch} on ${remote}?\n\nThe branch is removed from the server for everyone. ` +
+                "Commits that are only on it may be lost. Your local branches are kept.", true) },
           ];
         }
         if (kind === "head") {
@@ -455,7 +668,7 @@
       document.addEventListener("click", (e) => { if (!menu.contains(e.target)) closeMenu(); });
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
       window.addEventListener("blur", closeMenu);
-      document.querySelectorAll(".graph-panel, .sidebar").forEach((el) =>
+      document.querySelectorAll(".graph-panel, .sidebar, #status").forEach((el) =>
         el.addEventListener("scroll", closeMenu, { passive: true }));
 
       // Keep the "Remote branches" list open/closed across refreshes.
@@ -501,7 +714,7 @@
         if (!graphEl.contains(e.detail.elt) && e.detail.elt !== graphEl) return;
         const widths = [...graphEl.querySelectorAll(".page[data-graph-width]")]
           .map((p) => +p.dataset.graphWidth);
-        graphEl.style.setProperty("--lanes", Math.max(1, ...widths));
+        graphEl.parentElement.style.setProperty("--lanes", Math.max(1, ...widths));
         if (selectedSha) {
           const row = graphEl.querySelector(`.row[data-sha="${selectedSha}"]`);
           if (row) row.classList.add("selected");
@@ -519,6 +732,49 @@
         }
         checkRefs();
       });
+      // ---- minimizable sidebar sections ------------------------------------------
+      // Long lists (untracked files, branches, stashes) start minimized; a click on the
+      // header toggles, and that choice is remembered.
+      const SECTION_KEY = "gitlane-collapsed";
+      const collapsedPrefs = () => {
+        try { return JSON.parse(localStorage.getItem(SECTION_KEY) || "{}"); } catch (_) { return {}; }
+      };
+      const applySections = () => {
+        const prefs = collapsedPrefs();
+        for (const sec of statusEl.querySelectorAll("section[data-section]")) {
+          const name = sec.dataset.section;
+          const collapsed = name in prefs ? prefs[name] : sec.dataset.autoCollapse === "1";
+          sec.classList.toggle("collapsed", collapsed);
+          sec.querySelector(".sec-toggle")?.setAttribute("aria-expanded", String(!collapsed));
+        }
+      };
+      statusEl.addEventListener("click", (e) => {
+        const btn = e.target.closest(".sec-toggle");
+        if (!btn) return;
+        const sec = btn.closest("section[data-section]");
+        const collapsed = !sec.classList.contains("collapsed");
+        const prefs = collapsedPrefs();
+        prefs[sec.dataset.section] = collapsed;
+        try { localStorage.setItem(SECTION_KEY, JSON.stringify(prefs)); } catch (_) {}
+        applySections();
+      });
+      document.body.addEventListener("htmx:afterSwap", (e) => { if (e.detail.target === statusEl) applySections(); });
+
+      // The commit box shows when something is staged (or a message was already typed).
+      const commitForm = document.getElementById("commit-form");
+      const commitHint = document.getElementById("commit-hint");
+      const syncCommitBox = () => {
+        const toolbar = document.getElementById("toolbar");
+        if (!toolbar || toolbar.dataset.staged === undefined) return;  // status not loaded yet
+        const staged = +toolbar.dataset.staged > 0;
+        const draft = summary.value.trim() !== "" || description.value.trim() !== "";
+        commitForm.hidden = !staged && !draft;
+        commitHint.hidden = !commitForm.hidden;
+        commitForm.querySelector("button[type=submit]").disabled = !staged;
+        commitForm.querySelector("button[type=submit]").title = staged ? "" : "Stage some files first";
+      };
+      document.body.addEventListener("htmx:afterSettle", syncCommitBox);
+
       document.body.addEventListener("gitlane:committed", () => {
         summary.value = "";
         description.value = "";

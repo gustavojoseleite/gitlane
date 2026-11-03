@@ -11,7 +11,8 @@ from pathlib import Path
 
 import git
 
-from .git_ops import GitError, _has_head, _run, check_paths, get_status, operation_in_progress
+from .git_ops import (GitError, _has_head, _network_kwargs, _run, check_paths, get_status,
+                      operation_in_progress)
 from .graph import resolve_commit
 
 RESET_MODES = ("soft", "mixed", "hard")
@@ -157,6 +158,39 @@ def delete_branch(repo: git.Repo, name: str, force: bool = False) -> str:
             }
         raise
     return f"Deleted branch {name}."
+
+
+def _split_remote(repo: git.Repo, name: str) -> tuple[str, str]:
+    """"origin/feature/x" -> ("origin", "feature/x"), using the real remote names."""
+    remotes = sorted((r.name for r in repo.remotes), key=len, reverse=True)
+    remote = next((r for r in remotes if name.startswith(r + "/")), None)
+    if remote is None:
+        raise GitError(f"Remote branch '{name}' not found.")
+    return remote, name[len(remote) + 1:]
+
+
+def delete_remote_branch(repo: git.Repo, name: str) -> str:
+    """Delete a branch on the remote server (``git push <remote> --delete <branch>``)."""
+    if name not in list_branches(repo)[1]:
+        raise GitError(f"Remote branch '{name}' not found.")
+    remote, branch = _split_remote(repo, name)
+    code, default, _ = repo.git.symbolic_ref("--short", "-q", f"refs/remotes/{remote}/HEAD",
+                                            with_extended_output=True, with_exceptions=False)
+    if code == 0 and default.strip() == name:
+        raise GitError(f"{branch} is the default branch of {remote}, so it can't be deleted here.",
+                       hint="Pick another default branch in the repository settings on GitHub "
+                            "(or your Git host) first.")
+    try:
+        _run(repo.git.push, remote, "--delete", branch, **_network_kwargs(repo))
+    except GitError as e:
+        if "remote ref does not exist" not in str(e):
+            raise
+        # Someone already deleted it on the server: just drop our stale copy.
+        _run(repo.git.branch, "-r", "-d", name)
+        return f"{branch} was already gone from {remote}; removed the old copy of {name}."
+    kept = [b.name for b in list_branches(repo)[0] if b.upstream == name]
+    note = f" Your local branch {kept[0]} is kept." if kept else ""
+    return f"Deleted {branch} on {remote}.{note}"
 
 
 # --- commit operations ---------------------------------------------------------

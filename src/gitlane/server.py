@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from contextvars import ContextVar
 from dataclasses import asdict
@@ -119,7 +120,7 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        return (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("{{VERSION}}", escape(__version__))
 
     # --- tabs & repo picker (milestone 7) -------------------------------------
 
@@ -314,6 +315,11 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         return await run_action(branches.delete_branch, form.get("name", [""])[0],
                                 form.get("force", [""])[0] == "1", notice=lambda m: m)
 
+    @app.post("/actions/branch/delete-remote", response_class=HTMLResponse)
+    async def action_branch_delete_remote(request: Request) -> HTMLResponse:
+        return await run_action(branches.delete_remote_branch, await field(request, "name"),
+                                notice=lambda m: m)
+
     @app.post("/actions/commit/checkout", response_class=HTMLResponse)
     async def action_commit_checkout(request: Request) -> HTMLResponse:
         return await run_action(branches.checkout_commit, await field(request, "sha"), notice=lambda m: m)
@@ -417,11 +423,25 @@ _ICONS = {  # 24x24 stroke icons (drawn with currentColor)
     "undo": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
     "trash": '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
     "merge": '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+    "fetch": '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
+    "pull": '<path d="M12 4v13"/><path d="m6 11 6 6 6-6"/>',
+    "push": '<path d="M12 20V7"/><path d="m6 13 6-6 6 6"/>',
+    "force": '<path d="M12 20V7"/><path d="m6 13 6-6 6 6"/><path d="M6 3h12"/>',
+    "branch": '<circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="7" r="2.5"/>'
+              '<path d="M6 7.5v9"/><path d="M18 9.5a6 6 0 0 1-6 6H8"/>',
+    "stash": '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/>'
+             '<path d="M10 13h4"/>',
+    "folder": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    "repo": '<path d="M5 4a1 1 0 0 1 1-1h13v15H6a1 1 0 0 0-1 1z"/><path d="M5 19a2 2 0 0 0 2 2h12v-3"/>'
+            '<path d="M9 7h6"/>',
+    "up": '<path d="m6 15 6-6 6 6"/>',
+    "chevron": '<path d="m9 6 6 6-6 6"/>',
+    "check": '<path d="M20 6 9 17l-5-5"/>',
 }
 
 
-def _icon(name: str) -> str:
-    return (f'<svg class="icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" '
+def _icon(name: str, size: int = 14) -> str:
+    return (f'<svg class="icon" viewBox="0 0 24 24" width="{size}" height="{size}" aria-hidden="true" '
             f'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" '
             f'stroke-linejoin="round">{_ICONS[name]}</svg>')
 
@@ -457,7 +477,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
                   branch_lists: tuple[list, list[str]] | None = None,
                   stashes: list | None = None) -> str:
     if s.branch:
-        head = f'<span class="branch">{escape(s.branch)}</span>'
+        head = f'<span class="branch" title="Current branch">{_icon("branch", 13)}{escape(s.branch)}</span>'
     elif s.detached:
         head = f'<span class="branch detached">detached at {escape(s.head_commit[:7])}</span>'
     else:
@@ -469,7 +489,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         commit = '<span class="muted">No commits yet</span>'
 
     if s.upstream:
-        sync = f'tracking <code>{escape(s.upstream)}</code>'
+        sync = f'<span title="Upstream branch">↔ <code>{escape(s.upstream)}</code></span>'
     elif s.branch:
         sync = '<span class="muted">no upstream</span>'
     else:
@@ -478,6 +498,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
     can_stash = bool(s.staged or s.unstaged or s.untracked) and not s.conflicted and bool(s.head_commit)
     toolbar = (
         f'<div id="toolbar" class="toolbar" hx-swap-oob="true" data-branch="{_attr(s.branch or "")}" '
+        f'data-staged="{len(s.staged)}" '
         f'data-repo-root="{_attr(s.root)}">'
         f'<div class="tb-head">{head} <span class="tb-commit" title="{_attr(s.head_summary or "")}">{commit}</span>'
         f'{f"<span class=tb-sync>{sync}</span>" if sync else ""}</div>'
@@ -490,7 +511,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         _operation_box(s),
     ]
     if s.clean:
-        parts.append('<p class="clean">Working tree clean ✓</p>')
+        parts.append(f'<p class="clean">{_icon("check", 16)}<span>Working tree clean</span></p>')
     else:
         parts += [
             _file_list("Conflicts", s.conflicted, "conflict"),
@@ -526,7 +547,8 @@ def _stash_list(s: RepoStatus, stashes: list) -> str:
             f'<span class="stash-meta-row"><span class="muted stash-meta">{where}{st.date}</span>'
             f'<span class="actions">{actions}</span></span></li>'
         )
-    return (f'<section class="files stashes"><h2>Stashes <span class="count">{len(stashes)}</span></h2>'
+    return (f'<section class="files stashes" {_collapsible("stashes", len(stashes))}>'
+            f'<h2>{_section_toggle("Stashes", len(stashes))}</h2>'
             f'<ul>{"".join(items)}</ul></section>')
 
 
@@ -573,14 +595,18 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
             f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
         )
-    html = (f'<section class="files branches"><h2>Branches <span class="count">{len(local)}</span></h2>'
+    html = (f'<section class="files branches" {_collapsible("branches", len(local))}>'
+            f'<h2>{_section_toggle("Branches", len(local))}</h2>'
             f'<ul>{"".join(items)}</ul></section>' if local else "")
     if remote:
         ritems = "".join(
             f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">'
             f'<button type="button" class="file" title="Check out as a local branch" '
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": r})}">'
-            f'{_wrap(r)}</button></li>'
+            f'{_wrap(r)}</button><span class="actions">'
+            + _post("/actions/branch/delete-remote", {"name": r}, label="Delete on the remote",
+                    css="danger", icon="trash", confirm=delete_remote_question(r))
+            + '</span></li>'
             for r in remote
         )
         html += (f'<details class="files remotes" id="remote-branches"><summary>Remote branches '
@@ -588,14 +614,23 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
     return html
 
 
-def _prompt_button(url: str, field: str, label: str, question: str, css: str = "small") -> str:
+def delete_remote_question(name: str) -> str:
+    remote, _, branch = name.partition("/")
+    return (f"Delete {branch} on {remote}?\n\nThe branch is removed from the server for everyone. "
+            "Commits that are only on it may be lost. Your local branches are kept.")
+
+
+def _prompt_button(url: str, field: str, label: str, question: str, css: str = "small",
+                   icon: str | None = None, ok: str | None = None) -> str:
     """A button that asks a question, then POSTs the answer as a form field.
 
     (htmx's hx-prompt sends the answer URL-encoded in a header, which mangles
     names like "feature/x"; the page script sends it in the body instead.)
     """
+    inner = f'{_icon(icon, 15)}<span>{escape(label)}</span>' if icon else escape(label)
+    ok_attr = f' data-prompt-ok="{_attr(ok)}"' if ok else ""
     return (f'<button type="button" class="{css}" data-prompt-url="{_attr(url)}" '
-            f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}">{escape(label)}</button>')
+            f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}"{ok_attr}>{inner}</button>')
 
 
 def _error_banner(error: str, hint: str | None, action: dict | None = None) -> str:
@@ -612,23 +647,28 @@ def _error_banner(error: str, hint: str | None, action: dict | None = None) -> s
 
 
 def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
-    def btn(url: str, label: str, title: str, css: str = "", confirm: str | None = None) -> str:
+    def btn(url: str, label: str, title: str, icon: str, css: str = "", confirm: str | None = None,
+            count: int = 0) -> str:
         extra = f' hx-confirm="{_attr(confirm)}"' if confirm else ""
-        return (f'<button type="button" class="{css}" hx-post="{url}" hx-target="#status" '
-                f'hx-disabled-elt=".sync-bar button" title="{_attr(title)}"{extra}>{label}</button>')
+        badge = f'<span class="badge" aria-label="{count} commits">{count}</span>' if count else ""
+        return (f'<button type="button" class="tb-btn {css}" hx-post="{url}" hx-target="#status" '
+                f'hx-disabled-elt=".sync-bar button" title="{_attr(title)}"{extra}>'
+                f'{_icon(icon, 15)}<span>{label}</span>{badge}</button>')
 
-    pull_label = f"Pull ↓{s.behind}" if s.behind else "Pull"
-    push_label = f"Push ↑{s.ahead}" if s.ahead else "Push"
     buttons = [
-        btn("/actions/fetch", "Fetch", "Download new commits from all remotes without changing your files"),
-        btn("/actions/pull", pull_label, "Fetch and bring the upstream's new commits into this branch"),
-        btn("/actions/push", push_label, "Upload this branch's commits to the remote",
-            css="primary" if s.ahead and not s.behind else ""),
+        '<div class="btn-group" role="group" aria-label="Sync">',
+        btn("/actions/fetch", "Fetch", "Download new commits from all remotes without changing your files",
+            "fetch"),
+        btn("/actions/pull", "Pull", "Fetch and bring the upstream's new commits into this branch", "pull",
+            count=s.behind),
+        btn("/actions/push", "Push", "Upload this branch's commits to the remote", "push",
+            css="primary" if s.ahead and not s.behind else "", count=s.ahead),
+        "</div>",
     ]
     if s.ahead and s.behind:  # diverged: the only case where force push makes sense
         buttons.append(btn(
             "/actions/force-push", "Force push", "Overwrite the remote branch (uses --force-with-lease)",
-            css="danger",
+            "force", css="danger",
             confirm=(f"Force push {s.branch} to {s.upstream}?\n\n"
                      f"The remote's {s.behind} commit(s) that you don't have will be removed "
                      "from the branch. Only do this if you rewrote your own history (amend/rebase).\n\n"
@@ -638,14 +678,32 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
     tools = []
     if s.head_commit:
         tools.append(_prompt_button("/actions/branch/create", "name", "New branch",
-                                    "Name for the new branch (starts from the current commit):", css=""))
+                                    "New branch\n\nIt starts from the current commit, and gitlane "
+                                    "switches to it. Name:",
+                                    css="tb-btn", icon="branch", ok="Create branch"))
     if can_stash:
         tools.append(_prompt_button("/actions/stash/save", "message", "Stash changes",
-                                    "Stash all your changes (including untracked files).\n\n"
-                                    "Optional message to remember what this is:", css=""))
+                                    "Stash your changes\n\nAll changes, including untracked files, are "
+                                    "put aside and your working tree becomes clean. Message (optional):",
+                                    css="tb-btn", icon="stash", ok="Stash"))
     sep = '<span class="tb-sep" aria-hidden="true"></span>' if tools else ""
     return (f'<div class="sync-bar">{"".join(buttons)}{sep}{"".join(tools)}'
             '<span class="spinner" aria-hidden="true"></span></div>')
+
+
+COLLAPSE_AFTER = 15  # long lists start minimized (the user's own choice wins)
+_AUTO_COLLAPSE = {"untracked", "branches", "stashes"}
+
+
+def _collapsible(section: str, count: int) -> str:
+    auto = section in _AUTO_COLLAPSE and count > COLLAPSE_AFTER
+    return f'data-section="{_attr(section)}" data-auto-collapse="{1 if auto else 0}"'
+
+
+def _section_toggle(title: str, count: int) -> str:
+    """Section header that minimizes/expands its list (the page script handles clicks)."""
+    return (f'<button type="button" class="sec-toggle" aria-expanded="true" title="Minimize or expand">'
+            f'{_icon("chevron", 12)}<span>{escape(title)}</span> <span class="count">{count}</span></button>')
 
 
 def _file_list(title: str, files: list[FileChange], kind: str) -> str:
@@ -689,7 +747,8 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
             f'<span class="actions">{actions}</span></li>'
         )
     return (
-        f'<section class="files {kind}"><h2>{title} <span class="count">{len(files)}</span>{bulk}</h2>'
+        f'<section class="files {kind}" {_collapsible(kind, len(files))}>'
+        f'<h2>{_section_toggle(title, len(files))}{bulk}</h2>'
         f'<ul>{"".join(items)}</ul></section>'
     )
 
@@ -712,7 +771,7 @@ def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
     )
     if recent:
         items = "".join(
-            f'<li>{open_btn(p, f"<strong>{escape(p.name)}</strong> <span class=muted>{_wrap(str(p.parent))}</span>", "file")}</li>'
+            f'<li>{open_btn(p, f"{_icon('repo')} <strong>{escape(p.name)}</strong> <span class=muted>{_wrap(str(p.parent))}</span>", "file")}</li>'
             for p in recent
         )
         parts.append(f'<section class="files recent"><h2>Recent</h2><ul>{items}</ul></section>')
@@ -726,16 +785,16 @@ def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
     rows = []
     if listing.parent:
         rows.append(f'<li><button type="button" class="file" hx-get="/partials/picker?path='
-                    f'{quote(str(listing.parent), safe="")}" hx-target="#picker">↰ ..</button></li>')
+                    f'{quote(str(listing.parent), safe="")}" hx-target="#picker">{_icon("up")} ..</button></li>')
     for f in listing.folders:
         if f.is_repo:
-            rows.append(f'<li class="is-repo">{open_btn(f.path, f"<span class=repo-mark>git</span> {_wrap(f.name)}", "file")}'
+            rows.append(f'<li class="is-repo">{open_btn(f.path, f"{_icon('repo')} {_wrap(f.name)} <span class=repo-mark>git</span>", "file")}'
                         f'<span class="actions"><button type="button" class="icon-btn" title="Show folders inside" '
                         f'aria-label="Show folders inside {_attr(f.name)}" hx-get="/partials/picker?path='
-                        f'{quote(str(f.path), safe="")}" hx-target="#picker">›</button></span></li>')
+                        f'{quote(str(f.path), safe="")}" hx-target="#picker">{_icon("chevron")}</button></span></li>')
         else:
             rows.append(f'<li><button type="button" class="file" hx-get="/partials/picker?path='
-                        f'{quote(str(f.path), safe="")}" hx-target="#picker">📁 {_wrap(f.name)}</button></li>')
+                        f'{quote(str(f.path), safe="")}" hx-target="#picker">{_icon("folder")} {_wrap(f.name)}</button></li>')
     if not listing.folders:
         rows.append('<li class="muted empty">No folders here.</li>')
     more = '<p class="muted">Too many folders; showing the first ones.</p>' if listing.truncated else ""
@@ -862,7 +921,8 @@ def render_graph_page(page: graph.GraphPage) -> str:
             f'<div {attrs} data-sha="{c.sha}" tabindex="0">'
             f'<div class="g">{render_row_svg(row)}</div>'
             f'<div class="msg">{render_refs(c.refs)}{subject}</div>'
-            f'<div class="author" title="{_attr(c.email)}">{escape(c.author)}</div>'
+            f'<div class="author" title="{_attr(c.email)}">{_avatar(c.author, c.email)}'
+            f'<span>{escape(c.author)}</span></div>'
             f'<div class="date">{c.date}</div>'
             f'<div class="sha"><code>{c.sha[:7]}</code></div>'
             "</div>"
@@ -873,6 +933,36 @@ def render_graph_page(page: graph.GraphPage) -> str:
         more = (f'<div class="more" hx-get="/partials/graph?skip={nxt}" '
                 f'hx-trigger="intersect once" hx-swap="outerHTML">Loading more commits…</div>')
     return f'<div class="page" data-graph-width="{page.width}">{"".join(rows)}</div>{more}'
+
+
+_KEEP_LINE = re.compile(r"^(\s|[-*+>•]\s|\d+[.)]\s|[A-Za-z][\w-]*: \S|```)")
+
+
+def reflow(body: str) -> str:
+    """Undo Git's 72-column hard wrapping so a narrow panel doesn't wrap twice.
+
+    Lines in a paragraph are joined unless they look like lists, quotes, code
+    (indented) or trailers ("Co-Authored-By: …"), which keep their own line.
+    """
+    out = []
+    for para in re.split(r"\n\s*\n", body.strip()):
+        lines = para.split("\n")
+        joined = [lines[0]]
+        for line in lines[1:]:
+            if _KEEP_LINE.match(line) or _KEEP_LINE.match(joined[-1]) and joined[-1].startswith((" ", "\t")):
+                joined.append(line)
+            else:
+                joined[-1] = joined[-1].rstrip() + " " + line.strip()
+        out.append("\n".join(joined))
+    return "\n\n".join(out)
+
+
+def _avatar(name: str, email: str, size: str = "") -> str:
+    """Initials in a circle; the color comes from the e-mail so it's stable per person."""
+    words = [w for w in name.replace(".", " ").replace("_", " ").split() if w[:1].isalnum()]
+    initials = (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper() if words else "?"
+    hue = sum((email or name).lower().encode()) % 8
+    return f'<span class="avatar a{hue} {size}" aria-hidden="true">{escape(initials)}</span>'
 
 
 def render_commit(d: graph.CommitDetail) -> str:
@@ -896,13 +986,14 @@ def render_commit(d: graph.CommitDetail) -> str:
     if len(c.parents) > 1:
         note = f'<p class="muted">Merge commit — changes shown against the first parent {c.parents[0][:7]}.</p>'
     files_html = f'<ul>{"".join(files)}</ul>' if files else '<p class="muted">No file changes.</p>'
-    body = f'<pre class="body">{escape(d.body)}</pre>' if d.body else ""
+    body = f'<div class="body">{escape(reflow(d.body))}</div>' if d.body else ""
     return (
         '<article class="commit-detail">'
         f'<div class="refs">{render_refs(c.refs)}</div>'
         f'<h2 class="subject">{escape(c.subject)}</h2>{body}'
         '<dl>'
-        f'<dt>Author</dt><dd>{escape(c.author)} <span class="muted">&lt;{escape(c.email)}&gt;</span></dd>'
+        f'<dt>Author</dt><dd class="who">{_avatar(c.author, c.email, "lg")}<span>{escape(c.author)} '
+        f'<span class="muted">&lt;{escape(c.email)}&gt;</span></span></dd>'
         f'<dt>Date</dt><dd>{c.date}</dd>'
         f'<dt>Commit</dt><dd><code class="full-sha">{c.sha}</code></dd>'
         f'<dt>Parents</dt><dd>{parents}</dd>'
