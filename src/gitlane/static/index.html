@@ -171,6 +171,15 @@
       };
       const closeMenu = () => { menu.hidden = true; menu.innerHTML = ""; };
 
+      // Buttons that ask a question first (New branch, Stash…).
+      document.body.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-prompt-url]");
+        if (!b) return;
+        const answer = window.prompt(b.dataset.prompt, b.dataset.promptDefault || "");
+        if (answer === null) return;  // cancelled
+        post(b.dataset.promptUrl, { [b.dataset.promptField]: answer });
+      });
+
       const openMenu = (x, y, items) => {
         menu.innerHTML = "";
         for (const item of items) {

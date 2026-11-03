@@ -426,15 +426,16 @@ def test_branch_list_in_sidebar(client, repo_path):
     html = client.get("/partials/status").text
     assert 'data-ref-kind="head" data-ref-name="main"' in html
     assert 'data-ref-kind="branch" data-ref-name="feature"' in html
-    assert "hx-prompt" in html and "New branch" in html
+    assert "data-prompt-url" in html and "New branch" in html
     assert 'data-branch="main"' in html
 
 
-def test_create_branch_via_prompt_header(client, repo_path):
+def test_create_branch_with_slash_and_accents(client, repo_path):
     from .conftest import run
-    r = client.post("/actions/branch/create", headers={"HX-Prompt": "feature/x"})
-    assert "Created branch feature/x" in r.text
-    assert run(repo_path, "branch", "--show-current") == "feature/x"
+    r = client.post("/actions/branch/create", data={"name": "feature/ação"})
+    assert "Created branch feature/ação" in r.text
+    assert run(repo_path, "branch", "--show-current") == "feature/ação"
+    assert "data-prompt-url" in client.get("/partials/status").text
 
 
 def test_create_branch_at_commit_and_bad_name(client, repo_path):

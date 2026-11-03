@@ -237,8 +237,7 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     @app.post("/actions/branch/create", response_class=HTMLResponse)
     async def action_branch_create(request: Request) -> HTMLResponse:
         form = await _form(request)
-        # The sidebar button uses htmx's hx-prompt, which sends the answer in a header.
-        name = form.get("name", [""])[0] or request.headers.get("hx-prompt", "")
+        name = form.get("name", [""])[0]
         start = form.get("start", [""])[0] or None
         return await run_action(branches.create_branch, name, start, notice=lambda m: m)
 
@@ -417,8 +416,8 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
             f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
         )
-    new_btn = (f'<button type="button" class="small" hx-post="/actions/branch/create" hx-target="#status" '
-               f'hx-prompt="Name for the new branch (starts from the current commit):">New branch</button>')
+    new_btn = _prompt_button("/actions/branch/create", "name", "New branch",
+                             "Name for the new branch (starts from the current commit):")
     html = (f'<section class="files branches"><h2>Branches <span class="count">{len(local)}</span>{new_btn}</h2>'
             f'<ul>{"".join(items)}</ul></section>' if local else
             f'<section class="files branches"><h2>Branches{new_btn}</h2></section>')
@@ -433,6 +432,16 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
         html += (f'<details class="files remotes" id="remote-branches"><summary>Remote branches '
                  f'<span class="count">{len(remote)}</span></summary><ul>{ritems}</ul></details>')
     return html
+
+
+def _prompt_button(url: str, field: str, label: str, question: str, css: str = "small") -> str:
+    """A button that asks a question, then POSTs the answer as a form field.
+
+    (htmx's hx-prompt sends the answer URL-encoded in a header, which mangles
+    names like "feature/x"; the page script sends it in the body instead.)
+    """
+    return (f'<button type="button" class="{css}" data-prompt-url="{_attr(url)}" '
+            f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}">{escape(label)}</button>')
 
 
 def _error_banner(error: str, hint: str | None, action: dict | None = None) -> str:

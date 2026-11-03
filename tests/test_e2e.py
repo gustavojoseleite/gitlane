@@ -292,3 +292,12 @@ def test_dates_not_cut_off(make_repo, open_page):
     page = open_page(make_repo())
     over = page.eval_on_selector("#graph .row .date", "el => el.scrollWidth > el.clientWidth")
     assert not over
+
+
+def test_new_branch_button_keeps_name_intact(make_repo, open_page):
+    path = make_repo()
+    page = open_page(path)
+    accept_dialogs(page, "feature/ação→nova")
+    page.click("#status button:has-text('New branch')")
+    assert "Created branch feature/ação→nova" in notice(page)
+    assert run(path, "branch", "--show-current") == "feature/ação→nova"
