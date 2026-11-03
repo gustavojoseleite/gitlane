@@ -41,14 +41,25 @@ button {
 }
 button:hover { border-color: var(--accent); }
 .layout {
-  display: grid; grid-template-columns: minmax(320px, 420px) 1fr;
+  display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(340px, 38%);
+  grid-template-areas: "side graph detail";
   height: calc(100vh - 45px);
 }
-.sidebar { overflow: auto; padding: 16px; border-right: 1px solid var(--border); }
-.diff-panel { overflow: auto; padding: 16px; min-width: 0; }
+.sidebar { grid-area: side; overflow: auto; padding: 16px; border-right: 1px solid var(--border); }
+.graph-panel { grid-area: graph; overflow: auto; min-width: 0; }
+.detail-panel { grid-area: detail; overflow: auto; padding: 16px; min-width: 0; border-left: 1px solid var(--border); }
+@media (max-width: 1200px) {
+  .layout {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    grid-template-rows: 55% 45%;
+    grid-template-areas: "side graph" "side detail";
+  }
+  .detail-panel { border-left: 0; border-top: 1px solid var(--border); }
+}
 @media (max-width: 760px) {
-  .layout { grid-template-columns: 1fr; height: auto; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "side" "graph" "detail"; height: auto; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+  .graph-panel { max-height: 70vh; }
 }
 h1 { margin: 0; font-size: 22px; }
 h2 { font-size: 15px; margin: 20px 0 6px; display: flex; align-items: center; gap: 6px; }
@@ -130,3 +141,76 @@ li:first-child { border-top: 0; }
   margin: 6px 0 0; white-space: pre-wrap; word-break: break-word;
   font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* --- graph --- */
+#graph { --lanes: 1; --lane-w: 14px; font-size: 13px; }
+.row {
+  display: grid; align-items: center; height: 28px; cursor: pointer;
+  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) minmax(0, 140px) 120px 64px;
+  padding-right: 8px; border-bottom: 1px solid transparent;
+}
+.row:hover { background: var(--panel); }
+.row.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.row .g { height: 28px; padding-left: 4px; overflow: hidden; }
+.row .g svg { display: block; }
+.row .msg { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.row .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .author, .row .date { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; }
+.row .sha code { color: var(--muted); font-size: 12px; }
+@media (max-width: 1500px) { .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 110px 64px; } .row .author { display: none; } }
+.more, .empty-graph { padding: 12px 16px; color: var(--muted); }
+.ref {
+  flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px;
+  border: 1px solid var(--border); white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+}
+.ref.head { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.ref.branch { border-color: var(--accent); color: var(--accent); }
+.ref.remote { color: var(--muted); }
+.ref.tag { border-color: var(--yellow); color: var(--yellow); }
+svg line, svg path { stroke-width: 2; fill: none; }
+svg circle { stroke-width: 2; }
+svg circle.merge { fill: var(--bg) !important; }
+svg .head-ring { fill: none; stroke: var(--fg); stroke-width: 1.5; }
+:root { --c0:#0969da; --c1:#1a7f37; --c2:#bf3989; --c3:#9a6700; --c4:#8250df; --c5:#cf222e; --c6:#1b7c83; --c7:#bc4c00; }
+@media (prefers-color-scheme: dark) { :root { --c0:#4493f8; --c1:#3fb950; --c2:#db61a2; --c3:#d29922; --c4:#a371f7; --c5:#f85149; --c6:#39c5cf; --c7:#f0883e; } }
+.l0{stroke:var(--c0)} .l1{stroke:var(--c1)} .l2{stroke:var(--c2)} .l3{stroke:var(--c3)}
+.l4{stroke:var(--c4)} .l5{stroke:var(--c5)} .l6{stroke:var(--c6)} .l7{stroke:var(--c7)}
+.n0{fill:var(--c0);stroke:var(--c0)} .n1{fill:var(--c1);stroke:var(--c1)} .n2{fill:var(--c2);stroke:var(--c2)} .n3{fill:var(--c3);stroke:var(--c3)}
+.n4{fill:var(--c4);stroke:var(--c4)} .n5{fill:var(--c5);stroke:var(--c5)} .n6{fill:var(--c6);stroke:var(--c6)} .n7{fill:var(--c7);stroke:var(--c7)}
+
+/* --- commit detail --- */
+.commit-detail .refs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.commit-detail .subject { font-size: 17px; margin: 0 0 8px; word-break: break-word; display: block; }
+.commit-detail .body {
+  white-space: pre-wrap; word-break: break-word; margin: 0 0 12px;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg);
+}
+.commit-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0 0 8px; }
+.commit-detail dt { color: var(--muted); }
+.commit-detail dd { margin: 0; word-break: break-all; }
+.commit-detail h3 { font-size: 14px; margin: 16px 0 6px; }
+.full-sha { user-select: all; }
+.sha-link { border: 0; background: none; padding: 0 4px 0 0; color: var(--accent); }
+.sha-link:hover { text-decoration: underline; }
+#commit-diff:not(:empty) { margin-top: 16px; }
+
+/* --- image preview --- */
+.image-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; }
+.image-compare figure { margin: 0; min-width: 0; }
+.image-compare figcaption { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.image-compare img {
+  display: block; max-width: 100%; max-height: 420px; margin: 0 auto; border: 1px solid var(--border); border-radius: 4px;
+  background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+}
+.no-image {
+  display: grid; place-items: center; height: 120px; color: var(--muted);
+  border: 1px dashed var(--border); border-radius: 4px;
+}
+.commit input[type="text"] {
+  width: 100%; font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+}
+.commit .summary-row { width: 100%; position: relative; }
+.commit .counter { position: absolute; right: 8px; top: 7px; font-size: 11px; color: var(--muted); pointer-events: none; }
+.commit .counter.long { color: var(--yellow); }

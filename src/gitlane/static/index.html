@@ -20,53 +20,133 @@
         <p class="muted">Loading…</p>
       </div>
       <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status">
-        <label for="message">Commit message</label>
-        <textarea id="message" name="message" rows="4"
-                  placeholder="Summary of the change&#10;&#10;Optional longer description"></textarea>
+        <label for="summary">Commit</label>
+        <div class="summary-row">
+          <input type="text" id="summary" name="summary" autocomplete="off"
+                 placeholder="Summary (required)" aria-describedby="summary-count">
+          <span id="summary-count" class="counter" title="Keep the summary under 72 characters"></span>
+        </div>
+        <textarea id="description" name="description" rows="4"
+                  placeholder="Description (optional)"></textarea>
         <button type="submit" class="primary">Commit staged changes</button>
         <span class="hint">Ctrl+Enter</span>
       </form>
     </aside>
-    <main id="diff" class="diff-panel">
-      <p class="muted">Click a file to see its changes.</p>
+    <main class="graph-panel">
+      <div id="graph" hx-get="/partials/graph" hx-trigger="load">
+        <p class="muted">Loading history…</p>
+      </div>
     </main>
+    <section id="detail" class="detail-panel">
+      <p class="muted">Click a commit or a file to see its details.</p>
+    </section>
   </div>
   <script>
     (() => {
-      const diff = document.getElementById("diff");
-      const message = document.getElementById("message");
-      let currentDiff = null;
+      const graphEl = document.getElementById("graph");
+      const detail = document.getElementById("detail");
+      const summary = document.getElementById("summary");
+      const description = document.getElementById("description");
+      const counter = document.getElementById("summary-count");
+      const updateCounter = () => {
+        const n = summary.value.length;
+        counter.textContent = n ? String(72 - n) : "";
+        counter.classList.toggle("long", n > 72);
+      };
+      summary.addEventListener("input", updateCounter);
+      const EMPTY_DETAIL = '<p class="muted">Click a commit or a file to see its details.</p>';
+      let currentDetail = null;  // URL shown in the detail panel
+      let selectedSha = null;
+      let refsVersion = null;
+
+      const reloadDetail = () => { if (currentDetail) htmx.ajax("GET", currentDetail, "#detail"); };
+
+      const reloadGraph = () => htmx.ajax("GET", "/partials/graph", "#graph");
+
+      const checkRefs = async () => {
+        try {
+          const r = await fetch("/api/refs-version");
+          if (!r.ok) return;
+          const { version } = await r.json();
+          if (refsVersion !== null && version !== refsVersion) reloadGraph();
+          refsVersion = version;
+        } catch (_) { /* server stopped; status panel shows the error */ }
+      };
 
       const refresh = () => {
         htmx.trigger(document.body, "gitlane:refresh");
-        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
+        reloadDetail();
+        reloadGraph();
       };
+
+      const showCommit = (sha) => {
+        selectedSha = sha;
+        graphEl.querySelectorAll(".row.selected").forEach((r) => r.classList.remove("selected"));
+        const row = graphEl.querySelector(`.row[data-sha="${sha}"]`);
+        if (row) row.classList.add("selected");
+        htmx.ajax("GET", `/partials/commit?sha=${sha}`, "#detail");
+      };
+
       document.getElementById("refresh").addEventListener("click", refresh);
-      window.addEventListener("focus", () => {
-        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
-      });
+      window.addEventListener("focus", () => { reloadDetail(); checkRefs(); });
 
-      // Remember which diff is open so it can be reloaded after actions.
-      document.body.addEventListener("htmx:beforeRequest", (e) => {
-        if (e.detail.target === diff) {
-          currentDiff = e.detail.requestConfig.path;
-        }
+      // One click handler for all graph rows and parent links.
+      document.body.addEventListener("click", (e) => {
+        const target = e.target.closest(".row[data-sha], .sha-link[data-sha]");
+        if (target) showCommit(target.dataset.sha);
       });
-      document.body.addEventListener("gitlane:changed", () => {
-        if (currentDiff) htmx.ajax("GET", currentDiff, "#diff");
-      });
-      document.body.addEventListener("gitlane:committed", () => {
-        message.value = "";
-        currentDiff = null;
-        diff.innerHTML = '<p class="muted">Click a file to see its changes.</p>';
-      });
-
-      message.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      graphEl.addEventListener("keydown", (e) => {
+        const row = e.target.closest(".row");
+        if (!row) return;
+        if (e.key === "Enter") showCommit(row.dataset.sha);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
-          document.getElementById("commit-form").requestSubmit();
+          const next = e.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling;
+          if (next && next.matches(".row")) { next.focus(); showCommit(next.dataset.sha); }
         }
       });
+
+      // Remember what the detail panel shows so it can be reloaded.
+      document.body.addEventListener("htmx:beforeRequest", (e) => {
+        if (e.detail.target === detail) currentDetail = e.detail.requestConfig.path;
+      });
+
+      // Keep every graph row the same width: use the widest page so far.
+      document.body.addEventListener("htmx:afterSettle", (e) => {
+        if (!graphEl.contains(e.detail.elt) && e.detail.elt !== graphEl) return;
+        const widths = [...graphEl.querySelectorAll(".page[data-graph-width]")]
+          .map((p) => +p.dataset.graphWidth);
+        graphEl.style.setProperty("--lanes", Math.max(1, ...widths));
+        if (selectedSha) {
+          const row = graphEl.querySelector(`.row[data-sha="${selectedSha}"]`);
+          if (row) row.classList.add("selected");
+        }
+        checkRefs();
+      });
+
+      document.body.addEventListener("gitlane:changed", () => { reloadDetail(); checkRefs(); });
+      document.body.addEventListener("gitlane:committed", () => {
+        summary.value = "";
+        description.value = "";
+        updateCounter();
+        currentDetail = null;
+        detail.innerHTML = EMPTY_DETAIL;
+      });
+
+      // Ctrl+Enter commits from either field; plain Enter in the summary
+      // moves to the description instead of committing by accident.
+      for (const field of [summary, description]) {
+        field.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            document.getElementById("commit-form").requestSubmit();
+          } else if (field === summary) {
+            e.preventDefault();
+            description.focus();
+          }
+        });
+      }
       document.addEventListener("keydown", (e) => {
         if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey &&
             !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {

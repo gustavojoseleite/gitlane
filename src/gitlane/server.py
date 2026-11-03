@@ -11,10 +11,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, git_ops
+from . import __version__, blobs, git_ops, graph
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 
 COOKIE_NAME = "gitlane_token"
@@ -106,9 +106,13 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     def partial_diff(path: str, staged: int = 0) -> str:
         try:
             diff = with_repo(git_ops.diff_file, path, bool(staged))
+            images = None
+            if blobs.image_type(path):
+                before, after = (blobs.HEAD, blobs.INDEX) if staged else (blobs.INDEX, blobs.WORKTREE)
+                images = with_repo(image_pair, (before, path), (after, path))
         except GitError as e:
             return f'<p class="error">{escape(str(e))}</p>'
-        return render_diff(diff)
+        return render_diff(diff, images=images)
 
     # --- actions (POST only) ----------------------------------------------
 
@@ -140,9 +144,70 @@ def create_app(repo_path: str | Path, token: str, port: int) -> FastAPI:
     async def action_commit(request: Request) -> HTMLResponse:
         form = await _form(request)
         message = form.get("message", [""])[0]
+        if "summary" in form:  # two-field form: gitlane adds the blank line Git needs
+            summary = form["summary"][0].strip()
+            description = form.get("description", [""])[0].strip()
+            message = summary if not summary or not description else f"{summary}\n\n{description}"
         return await run_action(git_ops.commit, message,
                                 notice=lambda sha: f"Committed {sha}.",
                                 extra_events=("gitlane:committed",))
+
+    @app.get("/partials/graph", response_class=HTMLResponse)
+    def partial_graph(skip: int = 0) -> str:
+        return render_graph_page(with_repo(graph.graph_page, skip))
+
+    @app.get("/partials/commit", response_class=HTMLResponse)
+    def partial_commit(sha: str) -> str:
+        try:
+            return render_commit(with_repo(graph.commit_detail, sha))
+        except GitError as e:
+            return f'<p class="error">{escape(str(e))}</p>'
+
+    @app.get("/partials/commit-diff", response_class=HTMLResponse)
+    def partial_commit_diff(sha: str, path: str, orig: str | None = None) -> str:
+        try:
+            diff = with_repo(graph.commit_file_diff, sha, path, orig)
+            images = None
+            if blobs.image_type(path):
+                images = with_repo(commit_image_pair, sha, path, orig)
+        except GitError as e:
+            return f'<p class="error">{escape(str(e))}</p>'
+        return render_diff(diff, where=f"commit {sha[:7]}", images=images)
+
+    def image_pair(repo, before, after):
+        return tuple(blob_url(rev, p) if blobs.blob_exists(repo, rev, p) else None
+                     for rev, p in (before, after))
+
+    def commit_image_pair(repo, sha, path, orig):
+        sha = graph.resolve_commit(repo, sha)
+        parents = repo.commit(sha).parents
+        before = (parents[0].hexsha, orig or path) if parents else None
+        after = blob_url(sha, path) if blobs.blob_exists(repo, sha, path) else None
+        before_url = (blob_url(*before) if before and blobs.blob_exists(repo, *before) else None)
+        return before_url, after
+
+    @app.get("/blob")
+    def blob(rev: str, path: str) -> Response:
+        mime = blobs.image_type(path)
+        if mime is None:
+            return PlainTextResponse("Only images can be previewed.", status_code=415)
+        try:
+            data = with_repo(blobs.read_blob, rev, path)
+        except GitError as e:
+            return PlainTextResponse(str(e), status_code=400)
+        if data is None:
+            return PlainTextResponse("File not found at this version.", status_code=404)
+        immutable = rev not in (blobs.WORKTREE, blobs.INDEX, blobs.HEAD)
+        return Response(data, media_type=mime, headers={
+            # An SVG opened directly must never run scripts in gitlane's origin.
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=86400" if immutable else "no-store",
+        })
+
+    @app.get("/api/refs-version")
+    def api_refs_version() -> JSONResponse:
+        return JSONResponse({"version": with_repo(graph.refs_version)})
 
     @app.post("/actions/fetch", response_class=HTMLResponse)
     async def action_fetch() -> HTMLResponse:
@@ -311,7 +376,7 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
                       label="Delete", css="small danger")
                 + _post("/actions/stage", {"path": f.path}, label="Stage", css="small")
             )
-        file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#diff"'
+        file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#detail"'
         items.append(
             f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
             f'<button type="button" class="file"{file_btn}>{name}</button>'
@@ -323,9 +388,29 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
     )
 
 
-def render_diff(d: FileDiff) -> str:
-    where = "staged" if d.staged else "working tree"
+def blob_url(rev: str, path: str) -> str:
+    return f"/blob?rev={quote(rev, safe='')}&path={quote(path, safe='')}"
+
+
+def render_images(before: str | None, after: str | None) -> str:
+    def fig(label: str, url: str | None) -> str:
+        if url is None:
+            return f'<figure><figcaption>{label}</figcaption><div class="no-image">No file</div></figure>'
+        u = _attr(url)
+        return (f'<figure><figcaption>{label}</figcaption>'
+                f'<a href="{u}" target="_blank" rel="noopener" title="Open full size">'
+                f'<img src="{u}" alt="{label} version" loading="lazy"></a></figure>')
+    return f'<div class="image-compare">{fig("Before", before)}{fig("After", after)}</div>'
+
+
+def render_diff(d: FileDiff, where: str | None = None,
+                images: tuple[str | None, str | None] | None = None) -> str:
+    where = where or ("staged" if d.staged else "working tree")
     head = f'<h2 class="diff-title">{escape(d.path)} <span class="muted">({where})</span></h2>'
+    if images:
+        head += render_images(*images)
+        if d.binary or d.empty:
+            return head
     if d.binary:
         return head + '<p class="muted">Binary file — no text diff.</p>'
     if d.empty:
@@ -345,3 +430,114 @@ def render_diff(d: FileDiff) -> str:
     note = (f'<p class="muted">Diff truncated at {git_ops.MAX_DIFF_LINES} lines.</p>'
             if d.truncated else "")
     return head + f'<table class="diff">{"".join(rows)}</table>' + note
+
+
+# --- graph ----------------------------------------------------------------
+
+LANE_W = 14
+ROW_H = 28
+N_COLORS = 8
+
+
+def _x(col: int) -> int:
+    return col * LANE_W + LANE_W // 2
+
+
+def _segment(a: int, b: int, color: int, y0: int, y1: int) -> str:
+    cls = f"l{color % N_COLORS}"
+    if a == b:
+        return f'<line class="{cls}" x1="{_x(a)}" y1="{y0}" x2="{_x(b)}" y2="{y1}"/>'
+    mid = (y0 + y1) / 2
+    return (f'<path class="{cls}" d="M{_x(a)} {y0} C{_x(a)} {mid} {_x(b)} {mid} {_x(b)} {y1}"/>')
+
+
+def render_row_svg(row: graph.Row) -> str:
+    half = ROW_H // 2
+    parts = [_segment(a, b, c, 0, half) for a, b, c in row.top]
+    parts += [_segment(a, b, c, half, ROW_H) for a, b, c in row.bottom]
+    cx, cls = _x(row.col), f"n{row.color % N_COLORS}"
+    is_head = any(r.kind in ("head", "detached") for r in row.commit.refs)
+    if len(row.commit.parents) > 1:
+        parts.append(f'<circle class="{cls} merge" cx="{cx}" cy="{half}" r="3.5"/>')
+    else:
+        parts.append(f'<circle class="{cls}" cx="{cx}" cy="{half}" r="4.5"/>')
+    if is_head:
+        parts.append(f'<circle class="head-ring" cx="{cx}" cy="{half}" r="7.5"/>')
+    width = row.width * LANE_W
+    return (f'<svg width="{width}" height="{ROW_H}" viewBox="0 0 {width} {ROW_H}" '
+            f'aria-hidden="true">{"".join(parts)}</svg>')
+
+
+def render_refs(refs: list[graph.Ref]) -> str:
+    labels = {
+        "head": ("ref head", "●&nbsp;"), "branch": ("ref branch", ""),
+        "remote": ("ref remote", ""), "tag": ("ref tag", "🏷&nbsp;"),
+        "detached": ("ref head", "HEAD"),
+    }
+    out = []
+    for r in refs:
+        css, prefix = labels[r.kind]
+        name = "" if r.kind == "detached" else escape(r.name)
+        out.append(f'<span class="{css}" title="{escape(r.kind)}">{prefix}{name}</span>')
+    return "".join(out)
+
+
+def render_graph_page(page: graph.GraphPage) -> str:
+    if not page.rows and page.skip == 0:
+        return '<p class="muted empty-graph">No commits yet.</p>'
+    rows = []
+    for row in page.rows:
+        c = row.commit
+        rows.append(
+            f'<div class="row" data-sha="{c.sha}" tabindex="0">'
+            f'<div class="g">{render_row_svg(row)}</div>'
+            f'<div class="msg">{render_refs(c.refs)}<span class="subject">{escape(c.subject)}</span></div>'
+            f'<div class="author" title="{_attr(c.email)}">{escape(c.author)}</div>'
+            f'<div class="date">{c.date}</div>'
+            f'<div class="sha"><code>{c.sha[:7]}</code></div>'
+            "</div>"
+        )
+    more = ""
+    if page.has_more:
+        nxt = page.skip + len(page.rows)
+        more = (f'<div class="more" hx-get="/partials/graph?skip={nxt}" '
+                f'hx-trigger="intersect once" hx-swap="outerHTML">Loading more commits…</div>')
+    return f'<div class="page" data-graph-width="{page.width}">{"".join(rows)}</div>{more}'
+
+
+def render_commit(d: graph.CommitDetail) -> str:
+    c = d.commit
+    parents = " ".join(
+        f'<button type="button" class="sha-link" data-sha="{p}"><code>{p[:7]}</code></button>'
+        for p in c.parents
+    ) or '<span class="muted">none (first commit)</span>'
+    files = []
+    for f in d.files:
+        params = f"sha={c.sha}&path={quote(f.path, safe='')}"
+        if f.orig_path:
+            params += f"&orig={quote(f.orig_path, safe='')}"
+        name = escape(f.path) if not f.orig_path else f"{escape(f.orig_path)} → {escape(f.path)}"
+        files.append(
+            f'<li><span class="tag {escape(f.status.replace(" ", "-"))}">{escape(f.status)}</span>'
+            f'<button type="button" class="file" hx-get="{_attr("/partials/commit-diff?" + params)}" '
+            f'hx-target="#commit-diff">{name}</button></li>'
+        )
+    note = ""
+    if len(c.parents) > 1:
+        note = f'<p class="muted">Merge commit — changes shown against the first parent {c.parents[0][:7]}.</p>'
+    files_html = f'<ul>{"".join(files)}</ul>' if files else '<p class="muted">No file changes.</p>'
+    body = f'<pre class="body">{escape(d.body)}</pre>' if d.body else ""
+    return (
+        '<article class="commit-detail">'
+        f'<div class="refs">{render_refs(c.refs)}</div>'
+        f'<h2 class="subject">{escape(c.subject)}</h2>{body}'
+        '<dl>'
+        f'<dt>Author</dt><dd>{escape(c.author)} <span class="muted">&lt;{escape(c.email)}&gt;</span></dd>'
+        f'<dt>Date</dt><dd>{c.date}</dd>'
+        f'<dt>Commit</dt><dd><code class="full-sha">{c.sha}</code></dd>'
+        f'<dt>Parents</dt><dd>{parents}</dd>'
+        '</dl>'
+        f'<h3>Files changed <span class="count">{len(d.files)}</span></h3>{note}{files_html}'
+        '<div id="commit-diff"></div>'
+        '</article>'
+    )

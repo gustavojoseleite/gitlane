@@ -294,7 +294,7 @@ def commit(repo: git.Repo, message: str) -> str:
     """Commit the staged changes; returns the new commit's short hash."""
     message = message.strip()
     if not message:
-        raise GitError("Write a commit message first.")
+        raise GitError("Write a summary for the commit message first.")
     code, _, _ = repo.git.diff("--cached", "--quiet", with_extended_output=True, with_exceptions=False)
     if code == 0:
         raise GitError("Nothing staged to commit. Stage some files first.")
