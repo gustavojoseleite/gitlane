@@ -49,6 +49,7 @@ def test_runs_on_python_310(path):
     assert same_quote_nesting(path.read_text(encoding="utf-8")) == []
 
 
+@pytest.mark.skipif(not hasattr(tokenize, "FSTRING_START"), reason="needs Python 3.12+ to parse")
 def test_detector_finds_the_problem():
     assert same_quote_nesting('''x = f'{f"{y('a')}"}'\n''') == [1]
     assert same_quote_nesting('''x = f'{y("a")}'\n''') == []

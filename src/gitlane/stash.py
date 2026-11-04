@@ -108,7 +108,9 @@ def pop(repo: git.Repo, index, sha: str) -> str:
     try:
         _run(repo.git.stash, "pop", "-q", s.ref, **_STASH_ENV)
     except GitError as e:
-        if "CONFLICT" in str(e):
+        # Newer Git versions word (or, with -q, hide) the CONFLICT line differently,
+        # so look at the result instead: conflicted files mean the stash was kept.
+        if "CONFLICT" in str(e) or get_status(repo).conflicted:
             e.hint = ("Applying the stash caused conflicts. Fix the conflicted files in your editor "
                       "and stage them. The stash was kept, so nothing is lost; drop it when you're done.")
         raise

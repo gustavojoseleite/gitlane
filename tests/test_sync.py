@@ -240,6 +240,8 @@ def test_unreachable_https_remote_fails_fast_with_hint(s):
     ("Host key verification failed.", "not known yet"),
     ("fatal: could not read Username for 'https://github.com': terminal prompts disabled", "credential helper"),
     ("ssh: Could not resolve hostname github.com", "internet"),
+    ("fatal: unable to access 'https://127.0.0.1:1/x.git/': Failed to connect to 127.0.0.1 port 1 "
+     "after 0 ms: Could not connect to server", "Cannot connect"),  # curl 8
     ("! refs/heads/main:refs/heads/main [rejected] (stale info)", "last fetch"),
     ("something nobody has seen before", None),
 ])

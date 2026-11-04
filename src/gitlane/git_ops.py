@@ -229,6 +229,10 @@ _HINTS = [
      "Cannot reach the remote host. Check your internet connection."),
     ("Couldn't connect to server",
      "Cannot connect to the remote server. Check the remote URL and your network."),
+    ("Could not connect to server",  # curl 8 wording
+     "Cannot connect to the remote server. Check the remote URL and your network."),
+    ("Failed to connect to",
+     "Cannot connect to the remote server. Check the remote URL and your network."),
     ("Connection refused",
      "The remote refused the connection. Check the remote URL and your network."),
     ("Connection timed out",
@@ -429,7 +433,10 @@ def _network_kwargs(repo: git.Repo) -> dict:
         user_ssh = _config(repo, "core.sshCommand")
     if not user_ssh:
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-    return {"env": env, "kill_after_timeout": NETWORK_TIMEOUT}
+    kwargs = {"env": env}
+    if os.name != "nt":  # GitPython can't stop a stuck command on Windows
+        kwargs["kill_after_timeout"] = NETWORK_TIMEOUT
+    return kwargs
 
 
 def _config(repo: git.Repo, key: str) -> str | None:

@@ -377,7 +377,7 @@ kbd.hint {
 /* --- graph ------------------------------------------------------------------------ */
 .graph-head, .row {
   display: grid; align-items: center; column-gap: 10px; padding-right: 12px;
-  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 9.5em 8.6em 4.6em;
+  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 9.5em calc(16ch + 6px) 4.6em;
 }
 .graph-head {
   position: sticky; top: 0; z-index: 3; height: 30px;
@@ -403,7 +403,7 @@ kbd.hint {
 .row.selected .sha code { color: var(--accent); }
 /* Columns react to the graph panel's own width, so they follow the dividers. */
 @container (max-width: 760px) {
-  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 8.6em 4.6em; }
+  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) calc(16ch + 6px) 4.6em; }
   .row .author, .graph-head .author { display: none; }
 }
 @container (max-width: 520px) {

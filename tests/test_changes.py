@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from gitlane import git_ops
@@ -83,6 +85,7 @@ def test_unstage_rename_restores_both_paths(repo):
     assert paths(s.untracked) == ["DOCS.md"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows doesn't allow '*' in file names")
 def test_pathspec_magic_is_literal(repo):
     """A file named '*' must not stage every file."""
     (root(repo) / "*").write_text("star")

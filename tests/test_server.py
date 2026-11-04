@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from gitlane.server import COOKIE_NAME, REPO_HEADER, create_app
 from gitlane.workspace import repo_id
 
+WINDOWS = os.name == "nt"
 TOKEN = "secret-token-for-tests"
 PORT = 54321
 BASE = f"http://127.0.0.1:{PORT}"
@@ -21,7 +24,8 @@ def make_client(path, follow_redirects=False):
 def repo_path(make_repo):
     path = make_repo()
     (path / "README.md").write_text("changed <b>bold</b>\n")
-    (path / "<script>.txt").write_text("x")
+    if not WINDOWS:  # Windows doesn't allow < and > in file names
+        (path / "<script>.txt").write_text("x")
     return path
 
 
@@ -99,6 +103,7 @@ def test_index_page(client):
     assert client.get("/static/htmx.min.js").status_code == 200
 
 
+@pytest.mark.skipif(WINDOWS, reason="needs a file name with < and >")
 def test_api_status(client, repo_path):
     data = client.get("/api/status").json()
     assert data["branch"] == "main"
@@ -108,6 +113,7 @@ def test_api_status(client, repo_path):
     assert [f["path"] for f in data["untracked"]] == ["<script>.txt"]
 
 
+@pytest.mark.skipif(WINDOWS, reason="needs a file name with < and >")
 def test_partial_status_escapes_html(client):
     html = client.get("/partials/status").text
     assert "main" in html and "Initial commit" in html
