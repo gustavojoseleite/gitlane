@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import socket
+
+import pytest
 
 from gitlane import cli
 
@@ -128,3 +131,40 @@ def test_version_is_the_same_everywhere():
         return
     m = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.MULTILINE)
     assert m and m[1] == __version__
+
+
+# --- stopping ----------------------------------------------------------------------------
+
+@pytest.mark.skipif(os.name == "nt", reason="sends SIGINT, a POSIX signal")
+def test_ctrl_c_stops_quietly(make_repo):
+    """Ctrl+C must end gitlane with a short message, never a Python traceback."""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    port = cli.find_free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "gitlane", str(make_repo()), "--no-browser",
+                             "--port", str(port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True)
+    try:
+        deadline = time.time() + 15
+        line = ""
+        while "Press Ctrl+C" not in line and time.time() < deadline:
+            line = proc.stdout.readline()
+        assert "Press Ctrl+C" in line
+        proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=10)
+    finally:
+        proc.kill()
+    assert proc.returncode == 0
+    assert "Traceback" not in err and "KeyboardInterrupt" not in err
+    assert "gitlane stopped." in out
+
+
+def test_ctrl_c_during_startup_is_quiet(monkeypatch, capsys):
+    def boom(argv=None):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(cli, "main", boom)
+    assert cli.run() == 130
+    assert "gitlane stopped." in capsys.readouterr().err

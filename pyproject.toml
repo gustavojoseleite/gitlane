@@ -38,7 +38,7 @@ Issues = "https://github.com/gustavojoseleite/gitlane/issues"
 Changelog = "https://github.com/gustavojoseleite/gitlane/blob/main/CHANGELOG.md"
 
 [project.scripts]
-gitlane = "gitlane.cli:main"
+gitlane = "gitlane.cli:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

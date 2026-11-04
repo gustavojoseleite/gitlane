@@ -108,7 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     url = f"http://{HOST}:{port}/?token={token}"
 
     app = create_app(repo_root, token, port)
-    server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=port, log_level="warning"))
+    # Browsers keep connections open; don't make Ctrl+C wait for them.
+    server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=port, log_level="warning",
+                                           timeout_graceful_shutdown=3))
 
     def announce() -> None:
         while not server.started and not server.should_exit:
@@ -122,9 +124,23 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(url)
 
     threading.Thread(target=announce, daemon=True).start()
-    server.run()
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        # uvicorn shuts down cleanly first, then re-raises Ctrl+C; that's a normal stop.
+        pass
+    print("\ngitlane stopped.", flush=True)
     return 0
 
 
+def run() -> int:
+    """Console entry point: a Ctrl+C at any moment (even during startup) ends quietly."""
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("\ngitlane stopped.", file=sys.stderr, flush=True)
+        return 130
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
