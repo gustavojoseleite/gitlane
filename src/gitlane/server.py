@@ -770,8 +770,9 @@ def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
         '<button type="submit" class="primary">Open</button></form>'
     )
     if recent:
+        repo_icon = _icon("repo")
         items = "".join(
-            f'<li>{open_btn(p, f"{_icon('repo')} <strong>{escape(p.name)}</strong> <span class=muted>{_wrap(str(p.parent))}</span>", "file")}</li>'
+            f'<li>{open_btn(p, f"{repo_icon} <strong>{escape(p.name)}</strong> <span class=muted>{_wrap(str(p.parent))}</span>", "file")}</li>'
             for p in recent
         )
         parts.append(f'<section class="files recent"><h2>Recent</h2><ul>{items}</ul></section>')
@@ -788,7 +789,8 @@ def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
                     f'{quote(str(listing.parent), safe="")}" hx-target="#picker">{_icon("up")} ..</button></li>')
     for f in listing.folders:
         if f.is_repo:
-            rows.append(f'<li class="is-repo">{open_btn(f.path, f"{_icon('repo')} {_wrap(f.name)} <span class=repo-mark>git</span>", "file")}'
+            label = f'{_icon("repo")} {_wrap(f.name)} <span class=repo-mark>git</span>'
+            rows.append(f'<li class="is-repo">{open_btn(f.path, label, "file")}'
                         f'<span class="actions"><button type="button" class="icon-btn" title="Show folders inside" '
                         f'aria-label="Show folders inside {_attr(f.name)}" hx-get="/partials/picker?path='
                         f'{quote(str(f.path), safe="")}" hx-target="#picker">{_icon("chevron")}</button></span></li>')
