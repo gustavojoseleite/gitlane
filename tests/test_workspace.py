@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -263,7 +264,9 @@ def test_picker_partial(make_repo, tmp_path, monkeypatch):
     set_home(monkeypatch, tmp_path)
     proj = make_repo("proj")
     (tmp_path / "plain").mkdir()
-    (tmp_path / "<b>").mkdir()
+    # A folder name that must be escaped in HTML (Windows doesn't allow < and >).
+    tricky, escaped = ("R&D", "R&amp;D") if os.name == "nt" else ("<b>", "&lt;b&gt;")
+    (tmp_path / tricky).mkdir()
     gone = make_repo("closed")
     c = client_for(proj)
     rid = repo_id(gone.resolve())
@@ -274,7 +277,7 @@ def test_picker_partial(make_repo, tmp_path, monkeypatch):
     recent = html[html.index('class="files recent"'):html.index('class="files browser"')]
     assert f'data-open-path="{gone.resolve()}"' in recent and str(proj) not in recent  # open tabs aren't "recent"
     assert f'data-open-path="{proj}"' in html  # marked as a repo in the browser
-    assert "plain" in html and "&lt;b&gt;" in html and "<b>" not in html
+    assert "plain" in html and escaped in html and f">{tricky}<" not in html
     sub = c.get("/partials/picker", params={"path": str(tmp_path / "plain")}).text
     assert "No folders here." in sub
     bad = c.get("/partials/picker", params={"path": "/not/here"}).text
