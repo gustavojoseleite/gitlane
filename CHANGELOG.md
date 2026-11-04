@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-11-04
+
+- **New layout:** submodules, branches and tags on the left (submodules first, highlighted when one
+  needs attention); on the right, a **Changes** tab (files, stashes, commit box) and a **Details**
+  tab (the commit or stash you clicked)
+- **Diffs open in place of the graph**, with *Back to graph* (or Esc); the file you are viewing stays
+  highlighted
+- When a merge, cherry-pick or revert stops with conflicts, the Changes tab opens by itself
+- README: how to update gitlane
+
 ## 0.2.0 — 2026-11-04
 
 - **Tags:** right-click a commit → *Create tag here…* (add a message for an annotated tag);

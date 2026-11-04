@@ -5,13 +5,13 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/main-dark.png">
-  <img alt="gitlane showing a repository: changed files on the left, the commit graph in the middle, a commit with its diff on the right" src="https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/main-light.png">
+  <img alt="gitlane showing a repository: submodules, branches and tags on the left, the commit graph in the middle, changed files, stashes and the commit box on the right" src="https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/main-light.png">
 </picture>
 
 ## Features
 
 - **Changes** — see changed, staged and untracked files; stage, unstage or discard whole files; commit with a summary and description
-- **Diffs** — for your working files and any commit, with **before/after previews for images**
+- **Diffs** — for your working files and any commit, opened in place of the graph, with **before/after previews for images**
 - **Commit graph** — all branches with colored lanes, branch/tag labels and your stashes; fast on repositories with tens of thousands of commits
 - **Right-click menus** — checkout, create a branch, cherry-pick, revert, reset (soft / mixed / hard), merge, delete branches (also on the remote)
 - **Sync** — fetch, pull, push, and force push that always uses `--force-with-lease`
@@ -24,7 +24,9 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 - **Safe by default** — dangerous actions ask first; runs only on your computer (see [Security](#security))
 - Light and dark theme (follows your system)
 
-![Right-click menu on a commit](https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/menu.png)
+![Right-click menu on a branch, with the commit details on the right](https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/menu.png)
+
+![A file's diff opened in place of the graph](https://raw.githubusercontent.com/gustavojoseleite/gitlane/main/docs/screenshots/diff.png)
 
 ## Install
 
@@ -66,8 +68,41 @@ pipx install git+https://github.com/gustavojoseleite/gitlane
 ```
 </details>
 
-**Update:** `pipx upgrade gitlane` (or `uv tool upgrade gitlane`)
-**Uninstall:** `pipx uninstall gitlane` (or `uv tool uninstall gitlane`)
+**Uninstall:** `pipx uninstall gitlane` (or `uv tool uninstall gitlane`). Your remembered tabs stay in
+gitlane's settings folder (see [Usage](#usage)); delete that folder too if you want them gone.
+
+## Updating
+
+Already have gitlane installed? Update it with the same tool you installed it with:
+
+| Installed with | Update with |
+|---|---|
+| pipx | `pipx upgrade gitlane` |
+| uv | `uv tool upgrade gitlane` |
+| `uvx gitlane` | nothing to do — `uvx gitlane@latest` always runs the newest version |
+| pip (in a virtual environment) | `pip install --upgrade gitlane` |
+| from GitHub | `pipx install --force git+https://github.com/gustavojoseleite/gitlane` |
+
+Then:
+
+1. **Stop gitlane** if it is running (Ctrl+C in its terminal) and **start it again**. A running gitlane keeps
+   the old version until it restarts; reload the browser tab after it starts.
+2. **Check the version:** `gitlane --version` (or *About* in the top-right corner of the page).
+
+Updating keeps your open tabs, recent repos and hidden branches. See what changed in each version in
+[CHANGELOG.md](CHANGELOG.md).
+
+<details>
+<summary>Problems updating?</summary>
+
+- **"gitlane is already at the latest version" but it isn't:** PyPI can take a few minutes to show a new
+  release. Try again later, or install an exact version: `pipx install --force gitlane==X.Y.Z`.
+- **Go back to an older version:** `pipx install --force gitlane==0.2.0` (any version listed on
+  [PyPI](https://pypi.org/project/gitlane/#history)).
+- **`pipx: command not found`:** you installed gitlane another way — use the matching row of the table above.
+- **Still the old version after updating:** make sure you stopped the old gitlane. Run `which gitlane`
+  (`where gitlane` on Windows) to see which copy your terminal starts.
+</details>
 
 ## Usage
 

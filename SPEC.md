@@ -53,6 +53,7 @@ Remote operations (push/pull/fetch) must use the user's existing Git setup (SSH 
   - **Open tabs and recent repos are remembered** across restarts in `~/.config/gitlane/`; closing a tab never touches the repo
   - **Toolbar under the tabs** (always visible): current branch with ↑/↓, Fetch, Pull, Push, New branch, Stash, Refresh — these move out of the sidebar
   - Hidden tabs refresh when you switch to them, not in the background
+- **Layout (v0.3):** left = submodules (first, highlighted), branches, tags; centre = graph, and a file's diff opens over it (Back / Esc); right = tabs *Changes* (files, stashes, commit box) and *Details* (commit/stash)
 - **Status:** list changed / staged / untracked files
 - **Changes:** stage / unstage **whole files**, commit (message box), discard changes (confirm)
 - **Diff viewer:** for working-tree files and for files in any commit

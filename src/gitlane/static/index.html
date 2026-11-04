@@ -42,21 +42,6 @@
       <div id="status" hx-get="/partials/status" hx-trigger="gitlane:refresh from:body">
         <p class="muted">Loading…</p>
       </div>
-      <p id="commit-hint" class="commit-hint" hidden>Stage files to write a commit.</p>
-      <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status" hidden>
-        <label for="summary">Commit message</label>
-        <div class="summary-row">
-          <input type="text" id="summary" name="summary" autocomplete="off"
-                 placeholder="Summary (required)" aria-describedby="summary-count">
-          <span id="summary-count" class="counter" title="Keep the summary under 72 characters"></span>
-        </div>
-        <textarea id="description" name="description" rows="4"
-                  placeholder="Description (optional)"></textarea>
-        <div class="commit-actions">
-          <button type="submit" class="primary">Commit staged changes</button>
-          <kbd class="hint">Ctrl ↵</kbd>
-        </div>
-      </form>
     </aside>
     <div id="g1" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-label="Resize sidebar" title="Drag to resize · double-click to reset"></div>
@@ -69,10 +54,46 @@
         <p class="muted">Loading history…</p>
       </div>
     </main>
+    <!-- A file's diff opens here, on top of the graph -->
+    <section id="diff-pane" class="diff-pane" hidden aria-label="File changes">
+      <div class="diff-bar">
+        <button type="button" id="diff-back" class="tb-btn" title="Back to the graph (Esc)">
+          <svg class="icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none"
+               stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5"/><path d="m11 18-6-6 6-6"/></svg><span>Back to graph</span></button>
+        <kbd class="hint">Esc</kbd>
+      </div>
+      <div id="diff-view"></div>
+    </section>
     <div id="g2" class="gutter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-label="Resize details panel" title="Drag to resize · double-click to reset"></div>
-    <section id="detail" class="detail-panel">
-      <p class="muted empty-state">Click a commit or a file to see its details.</p>
+    <section class="detail-panel">
+      <div class="pane-tabs" role="tablist" aria-label="Right panel">
+        <button type="button" role="tab" id="tab-changes" data-pane="changes" aria-selected="true">
+          Changes <span id="changes-count" class="count"></span></button>
+        <button type="button" role="tab" id="tab-detail" data-pane="detail" aria-selected="false">Details</button>
+      </div>
+      <div id="changes-pane" class="pane" role="tabpanel" aria-labelledby="tab-changes">
+        <div id="changes"><p class="muted">Loading…</p></div>
+        <p id="commit-hint" class="commit-hint" hidden>Stage files to write a commit.</p>
+        <form id="commit-form" class="commit" hx-post="/actions/commit" hx-target="#status" hidden>
+          <label for="summary">Commit message</label>
+          <div class="summary-row">
+            <input type="text" id="summary" name="summary" autocomplete="off"
+                   placeholder="Summary (required)" aria-describedby="summary-count">
+            <span id="summary-count" class="counter" title="Keep the summary under 72 characters"></span>
+          </div>
+          <textarea id="description" name="description" rows="4"
+                    placeholder="Description (optional)"></textarea>
+          <div class="commit-actions">
+            <button type="submit" class="primary">Commit staged changes</button>
+            <kbd class="hint">Ctrl ↵</kbd>
+          </div>
+        </form>
+      </div>
+      <div id="detail" class="pane" role="tabpanel" aria-labelledby="tab-detail" hidden>
+        <p class="muted empty-state">Click a commit or a stash to see its details.</p>
+      </div>
     </section>
   </div>
   <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
@@ -183,8 +204,44 @@ SOFTWARE.</pre>
         counter.classList.toggle("long", n > 72);
       };
       summary.addEventListener("input", updateCounter);
-      const EMPTY_DETAIL = '<p class="muted empty-state">Click a commit or a file to see its details.</p>';
+      const EMPTY_DETAIL = '<p class="muted empty-state">Click a commit or a stash to see its details.</p>';
       let currentDetail = null;  // URL shown in the detail panel
+      let currentDiff = null;    // URL shown in the diff view (over the graph)
+      const changesEl = document.getElementById("changes");
+      const diffPane = document.getElementById("diff-pane");
+      const diffView = document.getElementById("diff-view");
+
+      // Right panel: "Changes" (working tree, stashes, commit box) or "Details" (a commit / stash).
+      const showPane = (name) => {
+        for (const b of document.querySelectorAll(".pane-tabs [data-pane]")) {
+          const on = b.dataset.pane === name;
+          b.setAttribute("aria-selected", String(on));
+          b.classList.toggle("active", on);
+        }
+        document.getElementById("changes-pane").hidden = name !== "changes";
+        detail.hidden = name !== "detail";
+      };
+      document.querySelector(".pane-tabs").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-pane]");
+        if (b) showPane(b.dataset.pane);
+      });
+
+      // A file's diff covers the graph until you go back.
+      const markViewing = (elt) => {
+        document.querySelectorAll(".file.viewing").forEach((b) => b.classList.remove("viewing"));
+        if (elt?.classList?.contains("file")) elt.classList.add("viewing");
+      };
+      const closeDiff = () => {
+        diffPane.hidden = true;
+        currentDiff = null;
+        diffView.innerHTML = "";
+        markViewing(null);
+      };
+      document.getElementById("diff-back").addEventListener("click", closeDiff);
+      document.addEventListener("keydown", (e) => {  // capture: runs before menus close on Esc
+        if (e.key === "Escape" && !diffPane.hidden && document.getElementById("ctx-menu").hidden &&
+            !document.querySelector("dialog[open]")) closeDiff();
+      }, true);
       let selectedSha = null;
       let refsVersion = null;
 
@@ -217,6 +274,7 @@ SOFTWARE.</pre>
       };
 
       const reloadDetail = () => { if (activeRepo && currentDetail) htmx.ajax("GET", currentDetail, "#detail"); };
+      const reloadDiff = () => { if (activeRepo && currentDiff) htmx.ajax("GET", currentDiff, "#diff-view"); };
 
       const reloadGraph = () => { if (activeRepo) htmx.ajax("GET", "/partials/graph", "#graph"); };
 
@@ -237,13 +295,14 @@ SOFTWARE.</pre>
         if (!activeRepo) return;
         htmx.trigger(document.body, "gitlane:refresh");
         reloadDetail();
+        reloadDiff();
         reloadGraph();
       };
 
       // htmx drops a new request for a panel while an old one is still running,
       // so a slow answer from the previous tab would block the new tab.
       const abortPending = () => {
-        for (const el of [statusEl, graphEl, detail, picker]) htmx.trigger(el, "htmx:abort");
+        for (const el of [statusEl, graphEl, detail, diffView, picker]) htmx.trigger(el, "htmx:abort");
       };
 
       // Same repo -> same color in every session.
@@ -314,6 +373,11 @@ SOFTWARE.</pre>
         currentDetail = null;
         refsVersion = null;
         detail.innerHTML = EMPTY_DETAIL;
+        showPane("changes");
+        closeDiff();
+        hadOperation = false;
+        changesEl.innerHTML = '<p class="muted">Loading…</p>';
+        document.getElementById("changes-count").textContent = "";
         const tb = document.getElementById("toolbar");
         tb.innerHTML = "";
         delete tb.dataset.staged;  // the new tab's status decides the commit box
@@ -407,6 +471,8 @@ SOFTWARE.</pre>
 
       const showCommit = (sha) => {
         selectedSha = sha;
+        closeDiff();
+        showPane("detail");
         graphEl.querySelectorAll(".row.selected").forEach((r) => r.classList.remove("selected"));
         const row = graphEl.querySelector(`.row[data-sha="${sha}"]`);
         if (row) row.classList.add("selected");
@@ -791,7 +857,16 @@ SOFTWARE.</pre>
 
       // Remember what the detail panel shows so it can be reloaded.
       document.body.addEventListener("htmx:beforeRequest", (e) => {
-        if (e.detail.target === detail) currentDetail = e.detail.requestConfig.path;
+        if (e.detail.target === detail) {
+          currentDetail = e.detail.requestConfig.path;
+          // A stash clicked in a list (not a reload, which htmx.ajax sends from elsewhere).
+          if (e.detail.elt?.closest?.("#changes, #status")) showPane("detail");
+        }
+        if (e.detail.target === diffView) {
+          currentDiff = e.detail.requestConfig.path;
+          diffPane.hidden = false;
+          if (e.detail.elt?.closest?.(".pane, #status")) markViewing(e.detail.elt);
+        }
       });
 
       // Keep every graph row the same width: use the widest page so far.
@@ -815,6 +890,8 @@ SOFTWARE.</pre>
         } else {
           reloadDetail();
         }
+        if (currentDiff && currentDiff.startsWith("/partials/stash-diff")) closeDiff();
+        else reloadDiff();
         checkRefs();
       });
       // ---- minimizable sidebar sections ------------------------------------------
@@ -826,14 +903,14 @@ SOFTWARE.</pre>
       };
       const applySections = () => {
         const prefs = collapsedPrefs();
-        for (const sec of statusEl.querySelectorAll("section[data-section]")) {
+        for (const sec of document.querySelectorAll("#status section[data-section], #changes section[data-section]")) {
           const name = sec.dataset.section;
           const collapsed = name in prefs ? prefs[name] : sec.dataset.autoCollapse === "1";
           sec.classList.toggle("collapsed", collapsed);
           sec.querySelector(".sec-toggle")?.setAttribute("aria-expanded", String(!collapsed));
         }
       };
-      statusEl.addEventListener("click", (e) => {
+      document.body.addEventListener("click", (e) => {
         const btn = e.target.closest(".sec-toggle");
         if (!btn) return;
         const sec = btn.closest("section[data-section]");
@@ -844,6 +921,14 @@ SOFTWARE.</pre>
         applySections();
       });
       document.body.addEventListener("htmx:afterSwap", (e) => { if (e.detail.target === statusEl) applySections(); });
+      document.body.addEventListener("htmx:afterSettle", applySections);  // #changes arrives out-of-band
+      // When a merge / cherry-pick / revert stops (conflicts), show it: switch to the Changes pane.
+      let hadOperation = false;
+      document.body.addEventListener("htmx:afterSettle", () => {
+        const has = !!changesEl.querySelector(".operation");
+        if (has && !hadOperation) showPane("changes");
+        hadOperation = has;
+      });
 
       // The commit box shows when something is staged (or a message was already typed).
       const commitForm = document.getElementById("commit-form");
@@ -866,6 +951,7 @@ SOFTWARE.</pre>
         updateCounter();
         currentDetail = null;
         detail.innerHTML = EMPTY_DETAIL;
+        closeDiff();
       });
 
       // Ctrl+Enter commits from either field; plain Enter in the summary

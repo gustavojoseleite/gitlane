@@ -219,7 +219,40 @@ header {
 }
 #status { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 16px; }
 .graph-panel { position: relative; grid-area: graph; overflow: auto; min-width: 0; min-height: 0; container-type: inline-size; --lanes: 1; --lane-w: 14px; }
-.detail-panel { position: relative; grid-area: detail; overflow: auto; padding: 18px 20px; min-width: 0; min-height: 0; }
+.detail-panel {
+  position: relative; grid-area: detail; min-width: 0; min-height: 0; background: var(--surface);
+  display: flex; flex-direction: column;
+}
+/* Right panel tabs: Changes | Details */
+.pane-tabs {
+  flex: none; display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--border);
+}
+.pane-tabs button {
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; box-shadow: none;
+  padding: 6px 10px 8px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 6px;
+}
+.pane-tabs button:hover { color: var(--fg); background: none; }
+.pane-tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+.pane-tabs .count:empty { display: none; }
+.pane { flex: 1; min-height: 0; }
+.pane[hidden] { display: none; }
+#changes-pane { display: flex; flex-direction: column; }
+#changes { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 16px; }
+#detail { overflow: auto; padding: 16px 20px; background: var(--bg); }
+/* A file's diff covers the graph */
+.diff-pane {
+  grid-area: graph; position: relative; z-index: 4; min-width: 0; min-height: 0; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+.diff-pane[hidden] { display: none; }
+.diff-bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.diff-bar .hint { margin-left: auto; }
+#diff-view { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px; }
+li .file.viewing { color: var(--accent); font-weight: 600; }
+li:has(> .file.viewing) { background: var(--accent-soft); }
 .gutter { background: var(--border); position: relative; z-index: 2; touch-action: none; }
 .gutter::after { content: ""; position: absolute; inset: 0 -4px; }  /* bigger grab area */
 .gutter[aria-orientation="vertical"] { cursor: col-resize; }
@@ -256,7 +289,7 @@ body.resizing.row { cursor: row-resize; }
 
 /* --- sidebar sections ------------------------------------------------------------ */
 h2 { font-size: 15px; margin: 0 0 8px; }
-#status h2, .picker h2 {
+#status h2, #changes h2, .picker h2 {
   display: flex; align-items: center; gap: 6px; margin: 18px 0 6px; padding: 0 2px;
   font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
@@ -318,7 +351,16 @@ li:hover .actions, li:focus-within .actions { visibility: visible; }
 .remotes summary .muted { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
 .remotes .list-tools { display: flex; justify-content: flex-end; margin: -2px 0 6px; }
 
-/* Submodules */
+/* Submodules: a highlighted card at the top of the left sidebar */
+.submodules > ul { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.submodules > h2 .sec-toggle { color: var(--accent); }
+.submodules.needs-attention > ul { border-color: color-mix(in srgb, var(--yellow) 55%, var(--border)); }
+.sub-attention {
+  font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent); border-radius: 999px; padding: 1px 8px;
+}
+.submodule-item { min-height: 36px; }
+.submodule-item > .icon { color: var(--accent) !important; }
 .sub-note { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; }
 .submodule-item > .icon { flex: none; color: var(--muted); }
 .submodule-item .sub-state { flex: none; font-size: 11px; color: var(--muted); }
@@ -348,7 +390,7 @@ li:hover .actions, li:focus-within .actions { visibility: visible; }
 .stash-meta-row .actions { margin-left: auto; }
 .stash-meta { font-size: 11.5px; white-space: nowrap; }
 
-/* --- commit box (docked at the bottom of the sidebar) ------------------------------ */
+/* --- commit box (docked at the bottom of the Changes pane) ------------------------------ */
 .commit-hint {
   flex: none; margin: 0; padding: 12px 14px; border-top: 1px solid var(--border);
   color: var(--muted); font-size: 12px; text-align: center; background: var(--surface);

@@ -597,23 +597,30 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         f'{f"<span class=tb-sync>{sync}</span>" if sync else ""}</div>'
         f'{_sync_toolbar(s, can_stash)}</div>'
     )
-    parts = [
-        toolbar,
-        _error_banner(error, hint, action) if error else "",
-        f'<div class="banner notice" role="status">{escape(notice)}</div>' if notice else "",
-        _operation_box(s),
-    ]
+    # Right panel ("Changes" pane): working-tree changes and stashes, sent out-of-band.
+    changes = [_operation_box(s)]
     if s.clean:
-        parts.append(f'<p class="clean">{_icon("check", 16)}<span>Working tree clean</span></p>')
+        changes.append(f'<p class="clean">{_icon("check", 16)}<span>Working tree clean</span></p>')
     else:
-        parts += [
+        changes += [
             _file_list("Conflicts", s.conflicted, "conflict", s.root),
             _file_list("Staged", s.staged, "staged", s.root),
             _file_list("Changes", s.unstaged, "unstaged", s.root),
             _file_list("Untracked", s.untracked, "untracked", s.root),
         ]
     if stashes is not None:
-        parts.append(_stash_list(s, stashes))
+        changes.append(_stash_list(s, stashes))
+    n_changes = len(s.conflicted) + len(s.staged) + len(s.unstaged) + len(s.untracked)
+    count = f'<span id="changes-count" class="count" hx-swap-oob="true">{n_changes or ""}</span>'
+    # Left sidebar: messages, then submodules, branches and tags.
+    parts = [
+        toolbar,
+        # innerHTML: the element itself stays, so the page script keeps its reference
+        f'<div id="changes" hx-swap-oob="innerHTML">{"".join(c for c in changes if c)}</div>',
+        count,
+        _error_banner(error, hint, action) if error else "",
+        f'<div class="banner notice" role="status">{escape(notice)}</div>' if notice else "",
+    ]
     if submodule_list:
         parts.append(_submodule_list(s, submodule_list))
     if branch_lists is not None:
@@ -864,7 +871,7 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
 
 
 COLLAPSE_AFTER = 15  # long lists start minimized (the user's own choice wins)
-_AUTO_COLLAPSE = {"untracked", "branches", "stashes", "tags", "submodules"}
+_AUTO_COLLAPSE = {"untracked", "branches", "stashes", "tags"}  # submodules always stay open
 
 
 def _collapsible(section: str, count: int) -> str:
@@ -922,8 +929,12 @@ def _submodule_list(s: RepoStatus, subs: list) -> str:
                      f'<span class="actions">{actions}</span></li>')
     behind = [sm for sm in subs if sm.state == "not set up"]
     bulk = (_post("/actions/submodule/update", label="Set up all", css="small") if behind else "")
-    return (f'<section class="files submodules" {_collapsible("submodules", len(subs))}>'
-            f'<h2>{_section_toggle("Submodules", len(subs))}{bulk}</h2>'
+    attention = sum(sm.state != "up to date" for sm in subs)
+    flag = (f'<span class="sub-attention" title="Submodules that need attention">{attention} need attention</span>'
+            if attention else "")
+    return (f'<section class="files submodules{" needs-attention" if attention else ""}" '
+            f'{_collapsible("submodules", len(subs))}>'
+            f'<h2>{_section_toggle("Submodules", len(subs))}{flag}{bulk}</h2>'
             f'<ul>{"".join(items)}</ul></section>')
 
 
@@ -965,7 +976,7 @@ def _file_list(title: str, files: list[FileChange], kind: str, root: str = "") -
                       label="Delete file", css="danger", icon="trash")
                 + _post("/actions/stage", {"path": f.path}, label="Stage", icon="plus")
             )
-        file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#detail"'
+        file_btn = "" if kind == "conflict" else f' hx-get="{_attr(diff_url)}" hx-target="#diff-view"'
         items.append(
             f'<li>{_status_badge(f.status)}'
             f'<button type="button" class="file" title="{_attr(f.path)}"{file_btn}>{name}</button>'
@@ -1275,7 +1286,7 @@ def render_commit(d: graph.CommitDetail) -> str:
         files.append(
             f'<li>{_status_badge(f.status)}'
             f'<button type="button" class="file" title="{_attr(f.path)}" hx-get="{_attr("/partials/commit-diff?" + params)}" '
-            f'hx-target="#commit-diff">{name}</button></li>'
+            f'hx-target="#diff-view">{name}</button></li>'
         )
     note = ""
     if len(c.parents) > 1:
@@ -1294,7 +1305,6 @@ def render_commit(d: graph.CommitDetail) -> str:
         f'<dt>Parents</dt><dd>{parents}</dd>'
         '</dl>'
         f'<h3>Files changed <span class="count">{len(d.files)}</span></h3>{note}{files_html}'
-        '<div id="commit-diff"></div>'
         '</article>'
     )
 
@@ -1308,7 +1318,7 @@ def render_stash(d) -> str:
         files.append(
             f'<li>{_status_badge(f.status)}'
             f'<button type="button" class="file" title="{_attr(f.path)}" hx-get="{_attr(url)}" '
-            f'hx-target="#commit-diff">{name}</button></li>'
+            f'hx-target="#diff-view">{name}</button></li>'
         )
     vals = {"index": str(st.index), "sha": st.sha}
     buttons = (
@@ -1327,6 +1337,5 @@ def render_stash(d) -> str:
         f'<dt>Commit</dt><dd><code class="full-sha">{st.sha}</code></dd></dl>'
         f'<div class="op-buttons">{buttons}</div>'
         f'<h3>Files <span class="count">{len(d.files)}</span></h3>{files_html}'
-        '<div id="commit-diff"></div>'
         '</article>'
     )

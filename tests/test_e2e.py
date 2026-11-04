@@ -107,10 +107,10 @@ def test_stage_and_commit_with_description(make_repo, open_page):
     path = make_repo()
     (path / "new.txt").write_text("hello")
     page = open_page(path)
-    item = page.locator("#status li", has_text="new.txt")
+    item = page.locator("#changes li", has_text="new.txt")
     item.hover()
     item.get_by_role("button", name="Stage").click()
-    page.wait_for_selector("#status .files.staged")
+    page.wait_for_selector("#changes .files.staged")
     page.fill("#summary", "Add greeting")
     page.press("#summary", "Enter")  # moves to description, must NOT commit
     assert page.evaluate("document.activeElement.id") == "description"
@@ -152,9 +152,9 @@ def test_image_preview_loads(make_repo, open_page):
     page = open_page(path)
     page.click("#graph .row >> nth=0")
     page.click("#detail button.file:has-text('pic.png')")
-    img = page.wait_for_selector("#commit-diff .image-compare img")
+    img = page.wait_for_selector("#diff-view .image-compare img")
     page.wait_for_function("(img) => img.complete && img.naturalWidth > 0", arg=img)
-    assert "No file" in page.inner_text("#commit-diff")  # nothing before
+    assert "No file" in page.inner_text("#diff-view")  # nothing before
 
 
 def test_context_menu_create_branch(make_repo, open_page):
@@ -211,12 +211,12 @@ def test_conflict_box_abort(make_repo, open_page):
     page.click("#graph .ref[data-ref-name='feature']", button="right")
     page.click("#ctx-menu button:has-text('Merge feature into main')")
     answer_modal(page)
-    page.wait_for_selector("#status .operation")
-    assert "1 file with conflicts" in page.inner_text("#status .operation")
-    page.click("#status .operation button:has-text('Abort merge')")
+    page.wait_for_selector("#changes .operation")
+    assert "1 file with conflicts" in page.inner_text("#changes .operation")
+    page.click("#changes .operation button:has-text('Abort merge')")
     answer_modal(page)
     assert "Merge aborted" in page.wait_for_selector(".banner.notice").inner_text()
-    assert page.locator("#status .operation").count() == 0
+    assert page.locator("#changes .operation").count() == 0
     assert (path / "README.md").read_text() == "main\n"
 
 
@@ -327,18 +327,18 @@ def test_stash_save_view_and_pop(make_repo, open_page):
     page.click("#toolbar button:has-text('Stash changes')")
     answer_modal(page, "login pela metade → ação")
     assert "Stashed your changes" in notice(page)
-    assert "login pela metade → ação" in page.inner_text("#status .stashes")
-    assert page.locator("#status .clean").count() == 1
+    assert "login pela metade → ação" in page.inner_text("#changes .stashes")
+    assert page.locator("#changes .clean").count() == 1
 
-    page.click("#status .stash-item button.file")
+    page.click("#changes .stash-item button.file")
     page.wait_for_selector("#detail .stash-detail")
     page.click("#detail button.file:has-text('novo.txt')")
-    page.wait_for_selector("#commit-diff tr.add")
+    page.wait_for_selector("#diff-view tr.add")
 
     page.click("#detail button:has-text('Pop (apply and delete)')")
     page.wait_for_selector("#status .banner.notice:has-text('Applied and removed')")
     assert (path / "novo.txt").read_text() == "untracked"
-    assert page.locator("#status .stash-item").count() == 0
+    assert page.locator("#changes .stash-item").count() == 0
     assert "Stash changes" in page.inner_text("#toolbar")  # changes are back, can stash again
     assert "Click a commit" in page.inner_text("#detail")  # stale stash view cleared
 
@@ -349,8 +349,8 @@ def test_stash_drop_needs_confirmation(make_repo, open_page):
     page = open_page(path)
     page.click("#toolbar button:has-text('Stash changes')")
     answer_modal(page, "keep me")
-    page.wait_for_selector("#status .stash-item")
-    item = page.locator("#status .stash-item")
+    page.wait_for_selector("#changes .stash-item")
+    item = page.locator("#changes .stash-item")
     item.hover()
     item.get_by_role("button", name="Drop").click()
     page.wait_for_selector("#modal[open].danger")  # red, and Cancel has the focus
@@ -384,11 +384,11 @@ def test_file_names_get_the_row_width(make_repo, open_page):
     path = make_repo()
     (path / "README.md").write_text("changed\n")
     page = open_page(path)
-    row = page.locator("#status .files.unstaged li").first
+    row = page.locator("#changes .files.unstaged li").first
     name = row.locator("button.file")
     row_w = row.bounding_box()["width"]
     assert name.bounding_box()["width"] > row_w * 0.55  # names aren't squeezed by hidden buttons
-    assert page.eval_on_selector("#status .files.unstaged button.file",
+    assert page.eval_on_selector("#changes .files.unstaged button.file",
                                  "el => el.getBoundingClientRect().height") < 30  # one line
 
 
@@ -396,7 +396,7 @@ def test_row_buttons_never_cover_the_name(make_repo, open_page):
     path = make_repo()
     (path / "README.md").write_text("changed\n")
     page = open_page(path)
-    row = page.locator("#status .files.unstaged li").first
+    row = page.locator("#changes .files.unstaged li").first
     row.hover()
     name = row.locator("button.file").bounding_box()
     for b in row.locator(".actions button").all():
@@ -432,13 +432,13 @@ def test_open_second_repo_and_switch(make_repo, open_page):
     page.click("#tabs .tab-new")
     page.fill("#open-path", str(b))
     page.press("#open-path", "Enter")
-    page.wait_for_selector("#status button.file:has-text('beta-only.txt')")
+    page.wait_for_selector("#changes button.file:has-text('beta-only.txt')")
     assert tab_names(page) == ["alpha", "beta"] and active_tab(page) == "beta"
     assert page.title() == "beta — gitlane"
     page.click("#tabs .tab-name:has-text('alpha')")
-    page.wait_for_selector("#status .clean")
+    page.wait_for_selector("#changes .clean")
     assert active_tab(page) == "alpha"
-    assert page.locator("#status button.file:has-text('beta-only.txt')").count() == 0
+    assert page.locator("#changes button.file:has-text('beta-only.txt')").count() == 0
 
 
 def test_actions_go_to_the_active_tab(make_repo, open_page):
@@ -449,9 +449,9 @@ def test_actions_go_to_the_active_tab(make_repo, open_page):
     page.click("#tabs .tab-new")
     page.fill("#open-path", str(b))
     page.press("#open-path", "Enter")
-    page.wait_for_selector("#status button.file:has-text('b.txt')")
-    page.click("#status .untracked h2 button:has-text('Stage all')")
-    page.wait_for_selector("#status .staged")
+    page.wait_for_selector("#changes button.file:has-text('b.txt')")
+    page.click("#changes .untracked h2 button:has-text('Stage all')")
+    page.wait_for_selector("#changes .staged")
     assert run(b, "diff", "--cached", "--name-only") == "b.txt"
     assert run(a, "diff", "--cached", "--name-only") == ""
 
@@ -529,7 +529,7 @@ def test_slow_answer_for_old_tab_neither_blocks_nor_lands(make_repo, open_page):
     page.click("#tabs .tab-new")
     page.fill("#open-path", str(b))
     page.press("#open-path", "Enter")
-    page.wait_for_selector("#status button.file:has-text('beta-only.txt')")
+    page.wait_for_selector("#changes button.file:has-text('beta-only.txt')")
     held = []
     # Hold back the first status answer (beta's), let later ones through.
     page.route("**/partials/status", lambda route: route.continue_() if held else held.append(route))
@@ -537,14 +537,14 @@ def test_slow_answer_for_old_tab_neither_blocks_nor_lands(make_repo, open_page):
     while not held:
         page.wait_for_timeout(20)
     page.click("#tabs .tab-name:has-text('alpha')")
-    page.wait_for_selector("#status .clean")
+    page.wait_for_selector("#changes .clean")
     try:
         held[0].continue_()  # beta's answer finally arrives (if not cancelled already)
     except Exception:
         pass
     page.wait_for_timeout(400)
-    assert page.locator("#status .clean").count() == 1
-    assert "beta-only.txt" not in page.inner_text("#status")
+    assert page.locator("#changes .clean").count() == 1
+    assert "beta-only.txt" not in page.inner_text("#changes")
     assert page.inner_text("#toolbar .branch") == "main" and active_tab(page) == "alpha"
 
 
@@ -574,7 +574,7 @@ def test_discard_confirm_uses_dialog(make_repo, open_page):
     path = make_repo()
     (path / "README.md").write_text("changed\n")
     page = open_page(path)
-    row = page.locator("#status .files.unstaged li").first
+    row = page.locator("#changes .files.unstaged li").first
     row.hover()
     row.get_by_role("button", name="Discard changes").click()
     page.wait_for_selector("#modal[open].danger")
@@ -582,7 +582,7 @@ def test_discard_confirm_uses_dialog(make_repo, open_page):
     assert "cannot be undone" in page.inner_text("#modal-text")
     assert page.inner_text("#modal-ok") == "Discard"
     answer_modal(page)
-    page.wait_for_selector("#status .clean")
+    page.wait_for_selector("#changes .clean")
     assert (path / "README.md").read_text() == "hello\n"
 
 
@@ -604,7 +604,9 @@ def test_page_never_scrolls(make_repo, browser, serve, size):
     page.wait_for_selector("#detail .commit-detail")
     height = page.evaluate("document.documentElement.scrollHeight")
     assert height <= size[1]  # only the panels scroll, never the page
+    page.click("#tab-changes")  # the commit box lives in the Changes pane
     assert page.locator("#commit-form button[type=submit]").is_visible()
+    assert page.evaluate("document.documentElement.scrollHeight") <= size[1]
     ctx.close()
 
 
@@ -652,11 +654,11 @@ def test_commit_box_only_when_something_is_staged(make_repo, open_page):
     page = open_page(path)
     page.wait_for_selector("#commit-hint", state="visible")
     assert page.locator("#commit-form").is_hidden()
-    page.click("#status .unstaged h2 button:has-text('Stage all')")
+    page.click("#changes .unstaged h2 button:has-text('Stage all')")
     page.wait_for_selector("#commit-form", state="visible")
     assert page.locator("#commit-hint").is_hidden()
     page.fill("#summary", "draft")
-    page.click("#status .staged h2 button:has-text('Unstage all')")
+    page.click("#changes .staged h2 button:has-text('Unstage all')")
     page.wait_for_selector("#commit-form button[type=submit]:disabled")
     # a typed message never disappears; it just can't be committed yet
     assert page.locator("#commit-form").is_visible()
@@ -705,7 +707,7 @@ def test_minimize_sections(make_repo, open_page):
     for i in range(20):
         (path / f"untracked{i:02}.txt").write_text("x")
     page = open_page(path)
-    untracked = page.locator("#status section.untracked")
+    untracked = page.locator("#changes section.untracked")
     assert "collapsed" in untracked.get_attribute("class")  # 20 files: minimized by default
     assert untracked.locator("ul").is_hidden()
     assert untracked.locator("h2 button:has-text('Stage all')").is_visible()  # still usable
@@ -718,8 +720,8 @@ def test_minimize_sections(make_repo, open_page):
     page.click("#refresh")  # choices survive refreshes and reloads
     page.wait_for_timeout(300)
     page.reload()
-    page.wait_for_selector("#status section.untracked")
-    assert page.locator("#status section.untracked ul").is_visible()
+    page.wait_for_selector("#changes section.untracked")
+    assert page.locator("#changes section.untracked ul").is_visible()
     assert page.locator("#status section.branches ul").is_hidden()
 
 
@@ -817,3 +819,40 @@ def test_open_submodule_in_new_tab(tmp_path, open_page):
     page.wait_for_selector("#tabs .tab.active:has-text('lib')")
     page.wait_for_selector("#graph .row:has-text('lib first')")
     assert tab_names(page) == ["app", "lib"]
+
+
+def test_diff_opens_over_the_graph(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("changed\n")
+    page = open_page(path)
+    assert page.locator("#diff-pane").is_hidden()
+    page.click("#changes .unstaged button.file:has-text('README.md')")
+    page.wait_for_selector("#diff-pane:not([hidden]) #diff-view table.diff")
+    assert page.locator("#changes button.file.viewing").count() == 1
+    page.keyboard.press("Escape")  # back to the graph
+    page.wait_for_selector("#diff-pane", state="hidden")
+    assert page.locator("#graph .row").first.is_visible()
+    # A commit's file opens there too; Back returns to the graph.
+    page.click("#graph .row:has-text('Initial commit')")
+    page.wait_for_selector("#detail .commit-detail")
+    assert page.get_attribute("#tab-detail", "aria-selected") == "true"
+    page.click("#detail button.file:has-text('README.md')")
+    page.wait_for_selector("#diff-view table.diff")
+    page.click("#diff-back")
+    page.wait_for_selector("#diff-pane", state="hidden")
+
+
+def test_right_panel_tabs(make_repo, open_page):
+    path = make_repo()
+    (path / "a.txt").write_text("x")
+    page = open_page(path)
+    assert page.inner_text("#changes-count") == "1"
+    assert page.locator("#changes section.untracked").is_visible()
+    page.click("#graph .row >> nth=0")
+    page.wait_for_selector("#detail .commit-detail")
+    assert page.locator("#changes").is_hidden()
+    page.click("#tab-changes")
+    assert page.locator("#changes section.untracked").is_visible() and page.locator("#detail").is_hidden()
+    page.click("#changes .untracked h2 button:has-text('Stage all')")
+    page.wait_for_selector("#changes .staged")
+    page.wait_for_selector("#changes-pane #commit-form:not([hidden])")  # the commit box is in the Changes pane

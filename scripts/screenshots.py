@@ -74,6 +74,14 @@ def make_demo(base: Path) -> Path:
     git(repo, "add", "src/cart.py")
     (repo / "README.md").write_text("# Acme Shop\n\nAn example online shop.\n")
     (repo / "notes.txt").write_text("ideas\n")
+    kit = base / "ui-kit"
+    kit.mkdir()
+    git(kit, "init", "-q", "-b", "main")
+    for i, msg in enumerate(("Buttons", "Dark mode colors", "Fix focus ring")):
+        git(kit, "commit", "-q", "--allow-empty", "-m", msg, when=i)
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(kit), "vendor/ui-kit", when=n)
+    git(repo, "commit", "-q", "-m", "Add the ui-kit submodule", when=n)
+    git(repo / "vendor" / "ui-kit", "checkout", "-q", "HEAD~1")
     return repo
 
 
@@ -111,13 +119,17 @@ def main() -> None:
                 page = ctx.new_page()
                 page.goto(f"http://127.0.0.1:{port}/?token=t")
                 page.wait_for_selector("#graph .row")
-                page.click("#graph .row:has-text('Round cart totals')")
-                page.wait_for_selector("#detail .commit-detail")
-                page.click("#detail button.file:has-text('cart.py')")
-                page.wait_for_selector("#commit-diff table.diff")
+                page.wait_for_selector("#changes .files")
                 page.wait_for_timeout(300)
-                page.screenshot(path=str(OUT / f"main-{scheme}.png"))
+                page.screenshot(path=str(OUT / f"main-{scheme}.png"))  # graph + Changes
                 if scheme == "light":
+                    page.click("#graph .row:has-text('Round cart totals')")
+                    page.wait_for_selector("#detail .commit-detail")
+                    page.click("#detail button.file:has-text('cart.py')")
+                    page.wait_for_selector("#diff-view table.diff")
+                    page.wait_for_timeout(300)
+                    page.screenshot(path=str(OUT / "diff.png"))  # a diff in place of the graph
+                    page.click("#diff-back")
                     page.click("#graph .ref[data-ref-name='fix/login-redirect']", button="right")
                     page.wait_for_timeout(200)
                     page.screenshot(path=str(OUT / "menu.png"))
