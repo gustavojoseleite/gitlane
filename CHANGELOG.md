@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-04
 
 - **Tags:** right-click a commit → *Create tag here…* (add a message for an annotated tag);
   a *Tags* section in the sidebar; push a tag, delete it, or delete it on the remote
