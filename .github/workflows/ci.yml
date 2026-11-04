@@ -29,7 +29,8 @@ jobs:
       - name: Show failing tests as annotations
         if: failure()
         shell: bash
-        run: grep -E "^(FAILED|ERROR) " pytest.log | head -30 | sed 's/^/::error::/' || true
+        # GitHub shows at most 10 annotations per step, so send the whole list as one.
+        run: echo "::error title=Failing tests::$(grep -E '^(FAILED|ERROR) ' pytest.log | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
 
   browser:
     name: Browser tests (Chrome)
@@ -48,7 +49,8 @@ jobs:
       - name: Show failing tests as annotations
         if: failure()
         shell: bash
-        run: grep -E "^(FAILED|ERROR) " pytest.log | head -30 | sed 's/^/::error::/' || true
+        # GitHub shows at most 10 annotations per step, so send the whole list as one.
+        run: echo "::error title=Failing tests::$(grep -E '^(FAILED|ERROR) ' pytest.log | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
 
   package:
     name: Build and test the installed package
@@ -70,4 +72,4 @@ jobs:
           /tmp/clean/bin/python -m pytest -q -rfE --tb=short -p no:cacheprovider tests 2>&1 | tee /tmp/pytest.log
       - name: Show failing tests as annotations
         if: failure()
-        run: grep -E "^(FAILED|ERROR) " /tmp/pytest.log | head -30 | sed 's/^/::error::/' || true
+        run: echo "::error title=Failing tests::$(grep -E '^(FAILED|ERROR) ' /tmp/pytest.log | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"

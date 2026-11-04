@@ -76,7 +76,8 @@ gitlane                      # anywhere else: reopen your tabs, or pick a reposi
 
 gitlane starts a small server on your computer and opens it in your browser. Keep the terminal
 open while you use it; press **Ctrl+C** to stop. Use **+** next to the tabs to open more
-repositories. Open tabs and recent repos are remembered.
+repositories. Open tabs and recent repos are remembered (in `~/.config/gitlane/`, or
+`%APPDATA%\gitlane` on Windows).
 
 | Option | What it does |
 |---|---|

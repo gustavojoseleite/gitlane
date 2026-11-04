@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +12,7 @@ from gitlane.git_ops import NotAGitRepo
 from gitlane.server import REPO_HEADER, create_app
 from gitlane.workspace import Workspace, repo_id
 
-from .conftest import run
+from .conftest import rmtree, run, set_home
 from .test_server import BASE, PORT, TOKEN
 
 
@@ -54,7 +53,7 @@ def test_open_rejects_non_repo_and_missing(tmp_path, state):
 
 def test_open_expands_home(make_repo, state, monkeypatch, tmp_path):
     path = make_repo()
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     assert Workspace(state).open("~/repo").path == path.resolve()
 
 
@@ -97,8 +96,8 @@ def test_deleted_repos_are_dropped(make_repo, state):
     ws.open(a)
     ws.open(b)
     ws.close(repo_id(b.resolve()))
-    shutil.rmtree(a)
-    shutil.rmtree(b)
+    rmtree(a)
+    rmtree(b)
     again = Workspace(state)
     assert again.tabs == [] and again.active is None and again.recent_repos() == []
 
@@ -140,12 +139,20 @@ def test_browse_lists_folders_and_marks_repos(make_repo, tmp_path):
 
 
 def test_browse_defaults_to_home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     assert workspace.browse(None).path == tmp_path.resolve()
 
 
 def test_browse_root_has_no_parent():
-    assert workspace.browse("/").parent is None
+    root = workspace.Path(workspace.Path.home().anchor)
+    assert workspace.browse(root).parent is None
+    assert workspace.browse("/").parent is None  # "/" is the current drive on Windows
+
+
+def test_windows_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert workspace.config_dir() == tmp_path / "Roaming" / "gitlane"
 
 
 @pytest.mark.parametrize("bad", ["relative", "/definitely/not/here"])
@@ -253,7 +260,7 @@ def test_toolbar_sent_with_status(make_repo):
 
 
 def test_picker_partial(make_repo, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     proj = make_repo("proj")
     (tmp_path / "plain").mkdir()
     (tmp_path / "<b>").mkdir()
@@ -276,5 +283,6 @@ def test_picker_partial(make_repo, tmp_path, monkeypatch):
 
 def test_state_saved_in_the_test_home_not_the_real_one(make_repo):
     client_for(make_repo())
-    saved = json.loads((workspace.Path.home() / ".config" / "gitlane" / "state.json").read_text())
+    assert workspace.config_dir().is_relative_to(workspace.Path.home())
+    saved = json.loads((workspace.config_dir() / "state.json").read_text())
     assert len(saved["open"]) == 1

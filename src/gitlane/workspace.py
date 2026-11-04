@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +22,16 @@ MAX_ENTRIES = 1000  # folders listed by the browser
 
 
 def config_dir() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "gitlane"
+    """Where gitlane keeps its state: $XDG_CONFIG_HOME, %APPDATA% on Windows, else ~/.config."""
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if not base and sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+    return Path(base or Path.home() / ".config") / "gitlane"
+
+
+def _is_full_path(path: Path) -> bool:
+    """Absolute, or rooted like "/" or "\\" (on Windows that means the current drive)."""
+    return path.is_absolute() or bool(path.root)
 
 
 def repo_id(path: str | Path) -> str:
@@ -35,7 +44,7 @@ def repo_root(path: str | Path) -> Path:
     path = Path(os.path.expanduser(str(path).strip()))
     if not str(path).strip():
         raise NotAGitRepo("Type or pick a folder first.")
-    if not path.is_absolute():
+    if not _is_full_path(path):
         raise NotAGitRepo(f"Use a full path, like {Path.home() / 'dev' / 'project'}")
     repo = open_repo(path)
     try:
@@ -183,7 +192,7 @@ def browse(path: str | Path | None) -> Listing:
     """Sub-folders of ``path`` (default: home); hidden folders are skipped."""
     raw = str(path).strip() if path else ""
     folder = Path(os.path.expanduser(raw)) if raw else Path.home()
-    if not folder.is_absolute():
+    if not _is_full_path(folder):
         raise NotAGitRepo("Use a full path.")
     folder = folder.resolve()
     if not folder.is_dir():

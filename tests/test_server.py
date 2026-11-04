@@ -522,6 +522,7 @@ def test_stash_actions_reject_get(client, path):
 
 
 def test_stash_flow_through_server(client, repo_path):
+    (repo_path / "novo.txt").write_text("untracked")  # works on every OS, unlike <script>.txt
     html = client.get("/partials/status").text
     assert "Stash changes" in html and 'data-prompt-url="/actions/stash/save"' in html
     r = client.post("/actions/stash/save", data={"message": "trabalho em <progresso>"})

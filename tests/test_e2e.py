@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from .conftest import run
+from .conftest import run, set_home
 from .test_blobs import PNG
 
 sync_api = pytest.importorskip("playwright.sync_api")
@@ -408,7 +408,7 @@ def active_tab(page):
 
 
 def test_start_without_repo_shows_picker(open_page, make_repo, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     make_repo("site")
     page = open_page(None, wait="#picker h1")
     assert page.locator(".layout").is_hidden() and page.locator("#toolbar-row").is_hidden()
