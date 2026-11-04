@@ -318,6 +318,23 @@ li:hover .actions, li:focus-within .actions { visibility: visible; }
 .remotes summary .muted { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
 .remotes .list-tools { display: flex; justify-content: flex-end; margin: -2px 0 6px; }
 
+/* Submodules */
+.sub-note { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; }
+.submodule-item > .icon { flex: none; color: var(--muted); }
+.submodule-item .sub-state { flex: none; font-size: 11px; color: var(--muted); }
+.submodule-item .sub-state.warn { color: var(--yellow); font-weight: 600; }
+.submodule-diff { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.submodule-diff p { margin: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.submodule-diff button { display: inline-flex; align-items: center; gap: 6px; }
+.sub-commits { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.sub-commits li { display: flex; gap: 8px; padding: 4px 10px; font-size: 12.5px; }
+.sub-commits li + li { border-top: 1px solid var(--border); }
+.sub-commits .sign { font-family: var(--mono); font-weight: 700; width: 1ch; }
+.sub-commits li.add { background: color-mix(in srgb, var(--green) 8%, transparent); }
+.sub-commits li.add .sign { color: var(--green); }
+.sub-commits li.del { background: color-mix(in srgb, var(--red) 8%, transparent); }
+.sub-commits li.del .sign { color: var(--red); }
+
 /* Branches hidden in the graph: greyed out, with a "show" eye that is always visible */
 .branch-item.is-hidden > .file, .branch-item.is-hidden > .where { opacity: .5; }
 .branch-item.is-hidden > .file { font-style: italic; }

@@ -4,6 +4,10 @@
 
 - **Tags:** right-click a commit → *Create tag here…* (add a message for an annotated tag);
   a *Tags* section in the sidebar; push a tag, delete it, or delete it on the remote
+- **Submodules:** a *Submodules* section (up to date / on another commit / not set up) with
+  *Set up* and *Back to the recorded commit*; a changed submodule shows what moved (commits added
+  or removed) instead of a text diff; open any submodule in its own tab. gitlane never throws away
+  files inside a submodule
 - **Choose folder…** in the repo picker opens your system's own folder window
   (zenity or kdialog on Linux, built in on macOS and Windows); it replaces the path field, which
   only appears when no folder window is available. The folder list stays

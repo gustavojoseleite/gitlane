@@ -64,6 +64,7 @@ Remote operations (push/pull/fetch) must use the user's existing Git setup (SSH 
   - Right-click a branch label → checkout, merge into current, delete (confirm)
 - **Branches:** create, switch, merge, delete
 - **Stash:** save (with optional message), list, apply, pop, drop (confirm)
+- **Submodules (v0.2):** status from porcelain v2's sub field, diffs with `--submodule=log`, a sidebar list from `git submodule status`; actions: `git submodule update --init --recursive` (set up / back to the recorded commit, confirm when it moves a checked-out submodule) and *open in a tab*; discard on a submodule only moves its commit and never touches files inside it
 - **Choose folder window (v0.2):** the picker's *Choose folder…* asks the local server to show the system dialog (zenity/kdialog on Linux with a display, osascript on macOS, PowerShell on Windows; no shell, the start folder passed as an argument/env var); hidden when none is available
 - **Hide branches (v0.2):** hide a branch (local with its upstream, or remote) or all remote branches from the graph via `git log --exclude`; stored per repo in gitlane's state file (Git is not changed); the current branch is always shown
 - **Tags (v0.2):** create at a commit (lightweight, or annotated with a message), list in the sidebar, push one tag, delete locally (confirm), delete on the remote (confirm)

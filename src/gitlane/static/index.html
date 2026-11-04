@@ -349,11 +349,21 @@ SOFTWARE.</pre>
         picker.querySelector("h1")?.after(b);
       };
       const opened = (data) => {
-        if (data.error) { pickerError(data.error); return; }
+        if (data.error) {
+          if (picker.offsetParent !== null) pickerError(data.error);  // the picker is showing
+          else ask({ question: `Can't open it\n\n${data.error}`, ok: "OK" });
+          return;
+        }
         tabs = data.tabs;
         activate(data.tab.id, false);
       };
       const openRepo = async (path) => opened(await api("/api/workspace/open", { path }));
+
+      // A submodule (or any repo path) opened in a new tab from the sidebar or a diff.
+      document.body.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-open-repo]");
+        if (b) openRepo(b.dataset.openRepo);
+      });
 
       // "Choose folder…": the server shows the system's folder window and waits for it.
       picker.addEventListener("click", async (e) => {

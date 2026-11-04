@@ -355,6 +355,6 @@ def commit_file_diff(repo: git.Repo, sha: str, path: str, orig: str | None = Non
     paths = check_paths([p for p in (orig, path) if p])
     parents = repo.commit(sha).parents
     base = parents[0].hexsha if parents else EMPTY_TREE
-    raw = _run(repo.git.diff, "--no-color", "--no-ext-diff", "--no-textconv", "-M",
+    raw = _run(repo.git.diff, "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--submodule=log",
                base, sha, "--", *paths, stdout_as_string=False)
     return parse_diff(raw.decode("utf-8", errors="replace"), path, staged=False)

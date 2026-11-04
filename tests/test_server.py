@@ -733,3 +733,27 @@ def test_choose_folder_endpoint(make_repo, tmp_path, monkeypatch):
     pick(folder_dialog.DialogBusy("A folder window is already open."))
     assert c.post("/api/workspace/choose").status_code == 409
     assert c.get("/api/workspace/choose").status_code == 405
+
+
+def test_submodule_in_sidebar_and_diff(tmp_path):
+    from .conftest import run
+    run(tmp_path, "config", "--global", "protocol.file.allow", "always")
+    lib, app = tmp_path / "lib", tmp_path / "app"
+    for d in (lib, app):
+        d.mkdir()
+        run(d, "init", "-q")
+        run(d, "commit", "-q", "--allow-empty", "-m", f"{d.name} 1")
+    run(lib, "commit", "-q", "--allow-empty", "-m", "lib <2>")
+    run(app, "submodule", "add", "-q", str(lib), "lib")
+    run(app, "commit", "-q", "-m", "add lib")
+    run(app / "lib", "checkout", "-q", "HEAD~1")
+    c = make_client(app)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert 'data-section="submodules"' in html and "on another commit" in html
+    assert "submodule · new commits" in html and "Back to the recorded commit" in html
+    assert f'data-open-repo="{app / "lib"}"' in html
+    diff = c.get("/partials/diff?path=lib&staged=0").text
+    assert "Submodule" in diff and "lib &lt;2&gt;" in diff and "Open lib in a new tab" in diff
+    r = c.post("/actions/submodule/update", data={"path": "lib"})
+    assert "lib is on the commit this project records." in r.text and "on another commit" not in r.text

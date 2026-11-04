@@ -17,7 +17,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, blobs, branches, folder_dialog, git_ops, graph, hidden, stash, tags, workspace
+from . import (__version__, blobs, branches, folder_dialog, git_ops, graph, hidden, stash, submodules, tags,
+               workspace)
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 from .workspace import Workspace
 
@@ -104,7 +105,8 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
             return render_status(get_status(repo), error=error, notice=notice, hint=hint,
                                  action=action, branch_lists=branches.list_branches(repo),
                                  hidden_refs=hidden.effective(repo, stored_hidden()),
-                                 stashes=stash.list_stashes(repo), tag_list=tags.list_tags(repo))
+                                 stashes=stash.list_stashes(repo), tag_list=tags.list_tags(repo),
+                                 submodule_list=submodules.list_submodules(repo))
         html = with_repo(build)
         # After the swap: a handler may clear the panel holding the clicked button, and
         # htmx needs that button in the page to place the out-of-band toolbar.
@@ -198,7 +200,7 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
                 images = with_repo(image_pair, (before, path), (after, path))
         except GitError as e:
             return f'<p class="error">{escape(str(e))}</p>'
-        return render_diff(diff, images=images)
+        return render_diff(diff, images=images, root=with_repo(lambda r: r.working_tree_dir))
 
     # --- actions (POST only) ----------------------------------------------
 
@@ -260,7 +262,8 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
                 images = with_repo(commit_image_pair, sha, path, orig)
         except GitError as e:
             return f'<p class="error">{escape(str(e))}</p>'
-        return render_diff(diff, where=f"commit {sha[:7]}", images=images)
+        return render_diff(diff, where=f"commit {sha[:7]}", images=images,
+                           root=with_repo(lambda r: r.working_tree_dir))
 
     def image_pair(repo, before, after):
         return tuple(blob_url(rev, p) if blobs.blob_exists(repo, rev, p) else None
@@ -373,6 +376,12 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
     @app.post("/actions/branch/hide-remotes", response_class=HTMLResponse)
     async def action_branch_hide_remotes(request: Request) -> HTMLResponse:
         return await hidden_action(hidden.set_remotes_hidden, await field(request, "on") == "1")
+
+    # --- submodules --------------------------------------------------------------
+
+    @app.post("/actions/submodule/update", response_class=HTMLResponse)
+    async def action_submodule_update(request: Request) -> HTMLResponse:
+        return await run_action(submodules.update, (await field(request, "path")) or None, notice=lambda m: m)
 
     # --- tags ------------------------------------------------------------------
 
@@ -559,7 +568,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
                   hint: str | None = None, action: dict | None = None,
                   branch_lists: tuple[list, list[str]] | None = None,
                   stashes: list | None = None, tag_list: list | None = None,
-                  hidden_refs: set[str] | None = None) -> str:
+                  hidden_refs: set[str] | None = None, submodule_list: list | None = None) -> str:
     if s.branch:
         head = f'<span class="branch" title="Current branch">{_icon("branch", 13)}{escape(s.branch)}</span>'
     elif s.detached:
@@ -598,13 +607,15 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         parts.append(f'<p class="clean">{_icon("check", 16)}<span>Working tree clean</span></p>')
     else:
         parts += [
-            _file_list("Conflicts", s.conflicted, "conflict"),
-            _file_list("Staged", s.staged, "staged"),
-            _file_list("Changes", s.unstaged, "unstaged"),
-            _file_list("Untracked", s.untracked, "untracked"),
+            _file_list("Conflicts", s.conflicted, "conflict", s.root),
+            _file_list("Staged", s.staged, "staged", s.root),
+            _file_list("Changes", s.unstaged, "unstaged", s.root),
+            _file_list("Untracked", s.untracked, "untracked", s.root),
         ]
     if stashes is not None:
         parts.append(_stash_list(s, stashes))
+    if submodule_list:
+        parts.append(_submodule_list(s, submodule_list))
     if branch_lists is not None:
         parts.append(_branch_lists(s, *branch_lists, hidden_refs=hidden_refs or set()))
     if tag_list:
@@ -793,7 +804,10 @@ def _prompt_button(url: str, field: str, label: str, question: str, css: str = "
 
 def _error_banner(error: str, hint: str | None, action: dict | None = None) -> str:
     button = ""
-    if action:
+    if action and action.get("open"):  # open a repository (a submodule) in a tab
+        button = (f'<div class="banner-action"><button type="button" data-open-repo="{_attr(action["open"])}">'
+                  f'{escape(action["label"])}</button></div>')
+    elif action:
         button = ('<div class="banner-action">'
                   + _post(action["url"], action.get("vals"), confirm=action.get("confirm"),
                           label=action["label"], css="danger")
@@ -850,7 +864,7 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
 
 
 COLLAPSE_AFTER = 15  # long lists start minimized (the user's own choice wins)
-_AUTO_COLLAPSE = {"untracked", "branches", "stashes", "tags"}
+_AUTO_COLLAPSE = {"untracked", "branches", "stashes", "tags", "submodules"}
 
 
 def _collapsible(section: str, count: int) -> str:
@@ -864,7 +878,56 @@ def _section_toggle(title: str, count: int) -> str:
             f'{_icon("chevron", 12)}<span>{escape(title)}</span> <span class="count">{count}</span></button>')
 
 
-def _file_list(title: str, files: list[FileChange], kind: str) -> str:
+def _open_repo_button(path: str, label: str) -> str:
+    """Opens another repository (a submodule) in a new tab (handled by the page script)."""
+    return (f'<button type="button" class="icon-btn" title="{_attr(label)}" aria-label="{_attr(label)}" '
+            f'data-open-repo="{_attr(path)}">{_icon("repo")}</button>')
+
+
+def _submodule_actions(f: FileChange, root: str) -> str:
+    """Buttons for a submodule in the Changes list."""
+    full = str(Path(root) / f.path)
+    actions = ""
+    if "new commits" in (f.submodule or ""):
+        actions += _post("/actions/discard", {"path": f.path},
+                         confirm=f"Move {f.path} back to the commit this project records?\n\n"
+                                 "Its newer commits are not deleted; they stay in the submodule's own history.",
+                         label="Back to the recorded commit", css="danger", icon="undo")
+        actions += _post("/actions/stage", {"path": f.path}, label="Stage (record its new commit)", icon="plus")
+    return actions + _open_repo_button(full, f"Open {f.path} in a new tab")
+
+
+def _submodule_list(s: RepoStatus, subs: list) -> str:
+    items = []
+    for sm in subs:
+        full = str(Path(s.root) / sm.path)
+        css = "ok" if sm.state == "up to date" else "warn"
+        label = "Set up" if sm.state == "not set up" else "Back to the recorded commit"
+        actions = ""
+        if sm.state != "up to date":
+            confirm = None
+            if sm.state == "on another commit":
+                confirm = (f"Move {sm.path} back to the commit this project records?\n\n"
+                           "Its newer commits are not deleted; they stay in the submodule's own history.")
+            actions += _post("/actions/submodule/update", {"path": sm.path}, label=label, icon="fetch",
+                             confirm=confirm)
+        if sm.ready:
+            actions += _open_repo_button(full, f"Open {sm.path} in a new tab")
+        title = f"{sm.path} — {sm.state} ({sm.sha[:7]})"
+        name = (f'<button type="button" class="file" title="{_attr(title)}" data-open-repo="{_attr(full)}">'
+                if sm.ready else f'<span class="file" title="{_attr(title)}">')
+        name += f'{_wrap(sm.path)}{"</button>" if sm.ready else "</span>"}'
+        items.append(f'<li class="submodule-item">{_icon("repo", 13)}{name}'
+                     f'<span class="sub-state {css}">{escape(sm.state)}</span>'
+                     f'<span class="actions">{actions}</span></li>')
+    behind = [sm for sm in subs if sm.state == "not set up"]
+    bulk = (_post("/actions/submodule/update", label="Set up all", css="small") if behind else "")
+    return (f'<section class="files submodules" {_collapsible("submodules", len(subs))}>'
+            f'<h2>{_section_toggle("Submodules", len(subs))}{bulk}</h2>'
+            f'<ul>{"".join(items)}</ul></section>')
+
+
+def _file_list(title: str, files: list[FileChange], kind: str, root: str = "") -> str:
     if not files:
         return ""
     if kind == "staged":
@@ -881,9 +944,13 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
             name = f"{_wrap(f.orig_path)} → {name}"
         diff_url = f"/partials/diff?path={quote(f.path, safe='')}&staged={1 if kind == 'staged' else 0}"
         actions = ""
+        if f.submodule:
+            name += f' <span class="sub-note">submodule · {escape(f.submodule)}</span>'
         if kind == "staged":
             vals = {"path": f.path, **({"orig": f.orig_path} if f.orig_path else {})}
             actions = _post("/actions/unstage", vals, label="Unstage", icon="minus")
+        elif kind == "unstaged" and f.submodule:
+            actions = _submodule_actions(f, root)
         elif kind == "unstaged":
             actions = (
                 _post("/actions/discard", {"path": f.path},
@@ -990,10 +1057,42 @@ def render_images(before: str | None, after: str | None) -> str:
     return f'<div class="image-compare">{fig("Before", before)}{fig("After", after)}</div>'
 
 
+def render_submodule_diff(d: FileDiff, root: str | None) -> str:
+    sm = d.submodule
+    if sm.old and sm.new:
+        move = f'<code>{escape(sm.old[:7])}</code> → <code>{escape(sm.new[:7])}</code>'
+    elif sm.new:
+        move = f'added at <code>{escape(sm.new[:7])}</code>'
+    elif sm.old:
+        move = f'removed (was <code>{escape(sm.old[:7])}</code>)'
+    else:
+        move = "same commit"
+    notes = {"rewind": "it went back to an older commit", "new submodule": "new submodule",
+             "submodule deleted": "submodule removed", "commits not present": "its commits aren't downloaded here"}
+    note = notes.get(sm.note, sm.note)
+    parts = [f'<div class="submodule-diff"><p>{_icon("repo", 15)} <strong>Submodule</strong> · commit {move}'
+             f'{f" <span class=muted>({escape(note)})</span>" if note else ""}</p>']
+    if sm.commits:
+        rows = "".join(
+            f'<li class="{"add" if sign == "+" else "del"}"><span class="sign">{"+" if sign == "+" else "−"}</span>'
+            f'{escape(subject)}</li>' for sign, subject in sm.commits)
+        parts.append(f'<ul class="sub-commits">{rows}</ul>')
+    inside = [w for w, on in (("changed files", sm.modified), ("untracked files", sm.untracked)) if on]
+    if inside:
+        parts.append(f'<p class="muted">It also has {" and ".join(inside)} inside. Open it in its own tab to '
+                     'see or commit them.</p>')
+    if root:
+        parts.append(f'<p><button type="button" data-open-repo="{_attr(str(Path(root) / d.path))}">'
+                     f'{_icon("repo")} Open {escape(d.path)} in a new tab</button></p>')
+    return "".join(parts) + "</div>"
+
+
 def render_diff(d: FileDiff, where: str | None = None,
-                images: tuple[str | None, str | None] | None = None) -> str:
+                images: tuple[str | None, str | None] | None = None, root: str | None = None) -> str:
     where = where or ("staged" if d.staged else "working tree")
     head = f'<h2 class="diff-title">{_wrap(d.path)} <span class="muted">({where})</span></h2>'
+    if d.submodule is not None:
+        return head + render_submodule_diff(d, root)
     if images:
         head += render_images(*images)
         if d.binary or d.empty:

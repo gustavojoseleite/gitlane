@@ -801,3 +801,19 @@ def test_choose_folder_window(make_repo, open_page, monkeypatch):
     page.click("#picker [data-choose-folder]")
     page.wait_for_selector("#tabs .tab.active:has-text('chosen')")
     assert page.locator("#picker").is_hidden()
+
+
+def test_open_submodule_in_new_tab(tmp_path, open_page):
+    run(tmp_path, "config", "--global", "protocol.file.allow", "always")
+    lib, app = tmp_path / "lib", tmp_path / "app"
+    for d in (lib, app):
+        d.mkdir()
+        run(d, "init", "-q")
+        run(d, "commit", "-q", "--allow-empty", "-m", f"{d.name} first")
+    run(app, "submodule", "add", "-q", str(lib), "vendor/lib")
+    run(app, "commit", "-q", "-m", "add lib")
+    page = open_page(app)
+    page.click(".submodules .submodule-item button.file")
+    page.wait_for_selector("#tabs .tab.active:has-text('lib')")
+    page.wait_for_selector("#graph .row:has-text('lib first')")
+    assert tab_names(page) == ["app", "lib"]

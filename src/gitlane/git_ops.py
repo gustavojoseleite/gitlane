@@ -41,6 +41,7 @@ class FileChange:
     path: str
     status: str  # human label: modified, added, deleted, renamed, ...
     orig_path: str | None = None  # for renames/copies
+    submodule: str | None = None  # for a submodule: what changed, e.g. "new commits, untracked files"
 
 
 @dataclass
@@ -103,13 +104,13 @@ def get_status(repo: git.Repo) -> RepoStatus:
         elif kind == "1":
             # 1 XY sub mH mI mW hH hI path
             parts = entry.split(" ", 8)
-            _add_change(status, parts[1], parts[8])
+            _add_change(status, parts[1], parts[8], sub=parts[2])
         elif kind == "2":
             # 2 XY sub mH mI mW hH hI Xscore path  (orig path is the next NUL entry)
             parts = entry.split(" ", 9)
             orig = entries[i] if i < len(entries) else None
             i += 1
-            _add_change(status, parts[1], parts[9], orig)
+            _add_change(status, parts[1], parts[9], orig, sub=parts[2])
         elif kind == "u":
             # u XY sub m1 m2 m3 mW h1 h2 h3 path
             parts = entry.split(" ", 10)
@@ -150,12 +151,22 @@ def _parse_header(entry: str, status: RepoStatus) -> None:
         status.behind = int(behind.lstrip("-"))
 
 
-def _add_change(status: RepoStatus, xy: str, path: str, orig: str | None = None) -> None:
+def _submodule_note(sub: str) -> str:
+    """Porcelain v2 "sub" field (S<C><M><U>) -> plain words."""
+    words = [w for flag, w in zip(sub[1:], ("new commits", "changed files inside", "untracked files inside"))
+             if flag != "."]
+    return ", ".join(words)
+
+
+def _add_change(status: RepoStatus, xy: str, path: str, orig: str | None = None, sub: str = "N...") -> None:
     x, y = xy[0], xy[1]
+    is_sub = sub.startswith("S")
     if x != ".":
-        status.staged.append(FileChange(path, _CODES.get(x, x), orig if x in "RC" else None))
+        status.staged.append(FileChange(path, _CODES.get(x, x), orig if x in "RC" else None,
+                                        submodule="commit changed" if is_sub else None))
     if y != ".":
-        status.unstaged.append(FileChange(path, _CODES.get(y, y)))
+        status.unstaged.append(FileChange(path, _CODES.get(y, y),
+                                          submodule=(_submodule_note(sub) or "changed") if is_sub else None))
 
 
 # --- Changes (milestone 2) ------------------------------------------------
@@ -321,10 +332,19 @@ def discard(repo: git.Repo, path: str) -> None:
     Staged changes are kept: the file goes back to its staged version.
     """
     (path,) = check_paths([path])
-    if path in repo.untracked_files:
+    if is_submodule(repo, path):
+        from .submodules import discard_submodule  # submodules imports this module
+        discard_submodule(repo, path)
+    elif path in repo.untracked_files:
         _run(repo.git.clean, "-f", "-q", "--", path)
     else:
         _run(repo.git.restore, "--worktree", "--", path)
+
+
+def is_submodule(repo: git.Repo, path: str) -> bool:
+    """True if ``path`` is a submodule (a "gitlink") in the index."""
+    out = repo.git.ls_files("-s", "--", path, with_exceptions=False)
+    return out.startswith("160000 ")
 
 
 def commit(repo: git.Repo, message: str) -> str:
@@ -337,6 +357,45 @@ def commit(repo: git.Repo, message: str) -> str:
         raise GitError("Nothing staged to commit. Stage some files first.")
     _run(repo.git.commit, "-q", "--cleanup=strip", "-m", message)
     return repo.head.commit.hexsha[:7]
+
+
+@dataclass
+class SubmoduleDiff:
+    """What changed in a submodule: the commit it points to, and work inside it."""
+    old: str | None = None  # short commit ids; None for a new / removed submodule
+    new: str | None = None
+    note: str = ""  # Git's note, e.g. "rewind", "new submodule", "commits not present"
+    commits: list[tuple[str, str]] = field(default_factory=list)  # ("+" added / "-" removed, subject)
+    modified: bool = False  # changed files inside
+    untracked: bool = False  # untracked files inside
+
+
+_SUBMODULE_LINE = re.compile(r"^Submodule (.+?) ([0-9a-f]+)\.\.\.?([0-9a-f]+)(?: \((.+?)\))?:?$")
+
+
+def _parse_submodule_line(line: str, result) -> bool:
+    """Lines from ``git diff --submodule=log``; True if the line was one of them."""
+    if result.submodule is None and not line.startswith("Submodule "):
+        return False
+    sub = result.submodule or SubmoduleDiff()
+    if line.startswith("Submodule "):
+        m = _SUBMODULE_LINE.match(line)
+        if m:
+            sub.old = None if set(m.group(2)) == {"0"} else m.group(2)
+            sub.new = None if set(m.group(3)) == {"0"} else m.group(3)
+            sub.note = m.group(4) or ""
+        elif line.endswith("contains modified content"):
+            sub.modified = True
+        elif line.endswith("contains untracked content"):
+            sub.untracked = True
+        else:
+            return False
+    elif line.startswith(("  > ", "  < ")):
+        sub.commits.append(("+" if line[2] == ">" else "-", line[4:]))
+    else:
+        return False
+    result.submodule = sub
+    return True
 
 
 @dataclass
@@ -354,10 +413,12 @@ class FileDiff:
     lines: list[DiffLine] = field(default_factory=list)
     binary: bool = False
     truncated: bool = False
+    submodule: SubmoduleDiff | None = None
 
     @property
     def empty(self) -> bool:
-        return not self.binary and not any(l.kind in ("add", "del") for l in self.lines)
+        return (not self.binary and self.submodule is None
+                and not any(l.kind in ("add", "del") for l in self.lines))
 
 
 def diff_file(repo: git.Repo, path: str, staged: bool = False) -> FileDiff:
@@ -366,7 +427,7 @@ def diff_file(repo: git.Repo, path: str, staged: bool = False) -> FileDiff:
     Untracked files are shown as entirely added.
     """
     (path,) = check_paths([path])
-    opts = ["--no-color", "--no-ext-diff", "--no-textconv"]
+    opts = ["--no-color", "--no-ext-diff", "--no-textconv", "--submodule=log"]
     if not staged and path in repo.untracked_files:
         raw = repo.git.diff(*opts, "--no-index", "--", os.devnull, path,
                             with_exceptions=False, stdout_as_string=False)
@@ -374,7 +435,23 @@ def diff_file(repo: git.Repo, path: str, staged: bool = False) -> FileDiff:
         raw = _run(repo.git.diff, *opts, "--cached", "--", path, stdout_as_string=False)
     else:
         raw = _run(repo.git.diff, *opts, "--", path, stdout_as_string=False)
-    return parse_diff(raw.decode("utf-8", errors="replace"), path, staged)
+    result = parse_diff(raw.decode("utf-8", errors="replace"), path, staged)
+    if not staged and (result.submodule is not None or is_submodule(repo, path)):
+        _submodule_work(repo, path, result)
+    return result
+
+
+def _submodule_work(repo: git.Repo, path: str, result: FileDiff) -> None:
+    """Changed / untracked files inside a submodule, from ``git status`` (git diff omits
+    them when the commit moved too)."""
+    sub = result.submodule or SubmoduleDiff()
+    out = repo.git.status("--porcelain=v2", "-z", "--", path, with_exceptions=False)
+    for entry in out.split("\0"):
+        parts = entry.split(" ", 3)
+        if len(parts) > 2 and parts[0] in ("1", "2") and parts[2].startswith("S"):
+            sub.modified = sub.modified or parts[2][2] == "M"
+            sub.untracked = sub.untracked or parts[2][3] == "U"
+    result.submodule = sub
 
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -393,6 +470,8 @@ def parse_diff(text: str, path: str, staged: bool) -> FileDiff:
             old, new = int(m.group(1)), int(m.group(2))
             in_hunk = True
             result.lines.append(DiffLine("hunk", line))
+        elif not in_hunk and _parse_submodule_line(line, result):
+            pass
         elif not in_hunk:
             if line.startswith("Binary files") or line == "GIT binary patch":
                 result.binary = True
