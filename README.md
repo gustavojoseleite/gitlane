@@ -15,6 +15,7 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 - **Commit graph** — all branches with colored lanes, branch/tag labels and your stashes; fast on repositories with tens of thousands of commits
 - **Right-click menus** — checkout, create a branch, cherry-pick, revert, reset (soft / mixed / hard), merge, delete branches (also on the remote)
 - **Sync** — fetch, pull, push, and force push that always uses `--force-with-lease`
+- **Hide branches** — keep the graph focused: hide a branch (or all remote branches) and show it again any time
 - **Tags** — create (lightweight or with a message), push, delete here or on the remote
 - **Stash** — save (including untracked files), apply, pop, drop, and look inside a stash
 - **Merge conflicts** — see the conflicted files, then *abort* or *mark resolved and commit*

@@ -111,13 +111,13 @@ def parse_refs(decoration: str, remotes: list[str]) -> list[Ref]:
     return refs
 
 
-def read_commits(repo: git.Repo, limit: int) -> list[Commit]:
-    """Newest-first history of all branches, tags and HEAD (stash excluded)."""
+def read_commits(repo: git.Repo, limit: int, exclude: set[str] | frozenset = frozenset()) -> list[Commit]:
+    """Newest-first history of all branches, tags and HEAD (stash and ``exclude`` refs left out)."""
     if not _has_head(repo) and not repo.refs:
         return []
     raw = _run(
         repo.git.log,
-        "--exclude=refs/stash", "--all", "--topo-order",
+        "--exclude=refs/stash", *(f"--exclude={r}" for r in sorted(exclude)), "--all", "--topo-order",
         f"--max-count={limit}", f"--format={_LOG_FORMAT}", "--decorate=short",
         stdout_as_string=False,
     ).decode("utf-8", errors="replace")
@@ -246,16 +246,30 @@ class GraphPage:
         return max((r.width for r in self.rows), default=1)
 
 
-def graph_page(repo: git.Repo, skip: int = 0, limit: int = PAGE_SIZE) -> GraphPage:
-    """One page of the laid-out graph.
+def _label_hidden(r: Ref, hidden: set[str] | frozenset) -> bool:
+    if r.kind == "branch":
+        return f"refs/heads/{r.name}" in hidden
+    if r.kind == "remote":
+        return f"refs/remotes/{r.name}" in hidden or "refs/remotes/*" in hidden
+    return False
+
+
+def graph_page(repo: git.Repo, skip: int = 0, limit: int = PAGE_SIZE,
+               hidden: set[str] | frozenset = frozenset()) -> GraphPage:
+    """One page of the laid-out graph, leaving out the ``hidden`` branches.
+
+    A hidden branch's label is also dropped from commits that are still shown
+    (because another branch reaches them).
 
     The layout depends on every row above, so we lay out from the top each
     time; this stays fast for repositories with tens of thousands of commits.
     """
     skip = max(0, skip)
-    commits = insert_stashes(read_commits(repo, skip + limit + 1), read_stashes(repo))
+    commits = insert_stashes(read_commits(repo, skip + limit + 1, hidden), read_stashes(repo))
     ups = upstreams(repo)
     for c in commits:
+        if c.refs and hidden:
+            c.refs = [r for r in c.refs if not _label_hidden(r, hidden)]
         if c.refs:
             c.refs = merge_tracking(c.refs, ups)
     rows = layout(commits[: skip + limit])

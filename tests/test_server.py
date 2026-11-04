@@ -282,7 +282,7 @@ def test_graph_infinite_scroll_sentinel(client, repo_path, monkeypatch):
     for i in range(4):
         run(repo_path, "commit", "-q", "--allow-empty", "-m", f"c{i}")
     monkeypatch.setattr(graph, "PAGE_SIZE", 2)
-    monkeypatch.setattr(graph.graph_page, "__defaults__", (0, 2))
+    monkeypatch.setattr(graph.graph_page, "__defaults__", (0, 2, frozenset()))
     html = client.get("/partials/graph").text
     assert html.count('class="row"') == 2
     assert 'hx-get="/partials/graph?skip=2"' in html and 'hx-trigger="intersect once"' in html
@@ -676,3 +676,26 @@ def test_tag_label_in_graph(make_repo):
     c.get(f"/?token={TOKEN}")
     html = c.get("/partials/graph").text
     assert 'data-ref-kind="tag" data-ref-name="v9"' in html and "🏷" not in html
+
+
+def test_hide_branch_endpoints(make_repo, tmp_path):
+    from .conftest import run
+    path = make_repo()
+    run(path, "switch", "-q", "-c", "feature")
+    run(path, "commit", "-q", "--allow-empty", "-m", "secret work")
+    run(path, "switch", "-q", "main")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    v1 = c.get("/api/refs-version").json()["version"]
+    assert "secret work" in c.get("/partials/graph").text
+    r = c.post("/actions/branch/hide", data={"kind": "branch", "name": "feature"})
+    assert "Hid feature in the graph" in r.text
+    assert 'class="branch-item is-hidden"' in r.text and 'data-hidden="1"' in r.text
+    assert "Show 1 hidden" in r.text
+    assert "secret work" not in c.get("/partials/graph").text
+    assert c.get("/api/refs-version").json()["version"] != v1  # the graph reloads
+    assert "current branch" in c.post("/actions/branch/hide", data={"kind": "branch", "name": "main"}).text
+    r = c.post("/actions/branch/show-all")
+    assert "All branches are shown" in r.text and "is-hidden" not in r.text
+    assert "secret work" in c.get("/partials/graph").text
+    assert c.get("/actions/branch/hide").status_code == 405

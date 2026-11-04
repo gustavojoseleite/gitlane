@@ -650,7 +650,11 @@ SOFTWARE.</pre>
             "Commits that are only on it may be lost. Your local branches are kept.", true) };
       };
 
-      const refItems = (kind, name, sha, remoteName) => {
+      const visibilityItem = (kind, name, isHidden) => isHidden
+        ? { label: `Show ${name} in the graph`, run: () => post("/actions/branch/show", { kind, name }) }
+        : { label: `Hide ${name} in the graph`, run: () => post("/actions/branch/hide", { kind, name }) };
+
+      const refItems = (kind, name, sha, remoteName, isHidden) => {
         const remoteExtra = remoteName ? ["-", deleteRemoteItem(remoteName)] : [];
         const branch = currentBranch();
         const mergeItem = {
@@ -662,6 +666,7 @@ SOFTWARE.</pre>
           return [
             { label: `Checkout ${name}`, run: () => post("/actions/branch/checkout", { name }) },
             mergeItem,
+            visibilityItem("branch", name, isHidden),
             "-",
             { label: `Delete ${name}…`, danger: true,
               run: () => post("/actions/branch/delete", { name }, `Delete the branch ${name}?`, true) },
@@ -673,6 +678,7 @@ SOFTWARE.</pre>
             { label: `Checkout ${name} as a local branch`,
               run: () => post("/actions/branch/checkout", { name }) },
             mergeItem,
+            visibilityItem("remote", name, isHidden),
             "-",
             deleteRemoteItem(name),
           ];
@@ -707,7 +713,8 @@ SOFTWARE.</pre>
         let items = null;
         if (row?.dataset.stashIndex !== undefined) items = stashItems(row.dataset.stashIndex, row.dataset.sha);
         else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName,
-                                       row?.dataset.sha || ref.dataset.refSha, ref.dataset.refRemote);
+                                       row?.dataset.sha || ref.dataset.refSha, ref.dataset.refRemote,
+                                       ref.dataset.hidden === "1");
         if (!items && row) items = commitItems(row.dataset.sha, row.dataset.merge === "1");
         if (!items) return;
         e.preventDefault();

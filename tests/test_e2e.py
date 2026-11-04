@@ -219,7 +219,7 @@ def test_infinite_scroll(make_repo, open_page, monkeypatch):
     path = make_repo()
     for i in range(24):
         run(path, "commit", "-q", "--allow-empty", "-m", f"c{i}")
-    monkeypatch.setattr(graph.graph_page, "__defaults__", (0, 10))
+    monkeypatch.setattr(graph.graph_page, "__defaults__", (0, 10, frozenset()))
     page = open_page(path)
     # Pages load as the sentinel scrolls into view (several at once if the screen is tall).
     assert page.locator("#graph .row").count() < 25
@@ -760,3 +760,20 @@ def test_create_tag_from_menu_and_delete_from_sidebar(make_repo, open_page):
     page.wait_for_selector(".banner.notice:has-text('Deleted tag v1.0')")
     assert run(path, "tag") == ""
     page.wait_for_selector(".tags", state="detached")  # no tags left: no section
+
+
+def test_hide_and_show_branch(make_repo, open_page):
+    path = make_repo()
+    run(path, "switch", "-q", "-c", "side")
+    run(path, "commit", "-q", "--allow-empty", "-m", "side work")
+    run(path, "switch", "-q", "main")
+    page = open_page(path)
+    page.wait_for_selector("#graph .row:has-text('side work')")
+    page.click("#graph .ref[data-ref-name='side']", button="right")
+    page.click("#ctx-menu button:has-text('Hide side in the graph')")
+    page.wait_for_selector(".banner.notice:has-text('Hid side')")
+    page.wait_for_selector("#graph .row:has-text('side work')", state="detached")
+    page.wait_for_selector(".branches .branch-item.is-hidden[data-ref-name='side']")
+    page.click(".branches .branch-item[data-ref-name='side'] .show-btn")
+    page.wait_for_selector("#graph .row:has-text('side work')")
+    assert page.locator(".branches .is-hidden").count() == 0

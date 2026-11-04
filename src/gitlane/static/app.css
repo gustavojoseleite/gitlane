@@ -315,6 +315,14 @@ li:hover .actions, li:focus-within .actions { visibility: visible; }
 }
 .remotes summary:hover { color: var(--fg); }
 .remotes summary .count { letter-spacing: 0; }
+.remotes summary .muted { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
+.remotes .list-tools { display: flex; justify-content: flex-end; margin: -2px 0 6px; }
+
+/* Branches hidden in the graph: greyed out, with a "show" eye that is always visible */
+.branch-item.is-hidden > .file, .branch-item.is-hidden > .where { opacity: .5; }
+.branch-item.is-hidden > .file { font-style: italic; }
+.branch-item > .show-btn { flex: none; color: var(--muted); }
+.branch-item > .show-btn:hover { color: var(--accent); }
 
 .stash-item { flex-direction: column; align-items: stretch; gap: 0; padding: 5px 4px 5px 8px; }
 .stash-item .file { padding: 0; }

@@ -75,6 +75,7 @@ class Workspace:
         self.tabs: list[Tab] = []
         self.active: str | None = None
         self.recent: list[Path] = []
+        self.hidden: dict[str, list[str]] = {}  # repo path -> refs hidden in its graph
         self._load()
 
     # --- persistence ----------------------------------------------------------
@@ -90,6 +91,10 @@ class Workspace:
             if isinstance(p, str) and _is_repo_root(Path(p)):
                 self._add(Path(p))
         self.recent = [Path(p) for p in data.get("recent", []) if isinstance(p, str)][:MAX_RECENT]
+        hidden = data.get("hidden")
+        if isinstance(hidden, dict):
+            self.hidden = {k: [r for r in v if isinstance(r, str)] for k, v in hidden.items()
+                           if isinstance(k, str) and isinstance(v, list)}
         active = data.get("active")
         active = repo_id(active) if isinstance(active, str) else None
         if any(t.id == active for t in self.tabs):
@@ -100,7 +105,7 @@ class Workspace:
     def _save(self) -> None:
         active = next((str(t.path) for t in self.tabs if t.id == self.active), None)
         data = {"open": [str(t.path) for t in self.tabs], "active": active,
-                "recent": [str(p) for p in self.recent]}
+                "recent": [str(p) for p in self.recent], "hidden": self.hidden}
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.state_file.with_suffix(".tmp")
@@ -149,6 +154,18 @@ class Workspace:
 
     def path_of(self, rid: str | None) -> Path | None:
         return next((t.path for t in self.tabs if t.id == rid), None)
+
+    def hidden_of(self, path: Path) -> set[str]:
+        """Branches hidden in this repo's graph (full ref names)."""
+        return set(self.hidden.get(str(path), ()))
+
+    def set_hidden(self, path: Path, refs: set[str]) -> None:
+        with self._lock:
+            if refs:
+                self.hidden[str(path)] = sorted(refs)
+            else:
+                self.hidden.pop(str(path), None)
+            self._save()
 
     def recent_repos(self) -> list[Path]:
         """Recent repos that still exist and aren't open in a tab."""

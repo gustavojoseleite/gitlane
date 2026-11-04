@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, blobs, branches, git_ops, graph, stash, tags, workspace
+from . import __version__, blobs, branches, git_ops, graph, hidden, stash, tags, workspace
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 from .workspace import Workspace
 
@@ -92,12 +92,17 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         finally:
             repo.close()
 
+    def stored_hidden() -> set[str]:
+        path = ws.path_of(_current_repo.get())
+        return ws.hidden_of(path) if path else set()
+
     def status_response(error: str | None = None, notice: str | None = None,
                         events: tuple[str, ...] = (), hint: str | None = None,
                         action: dict | None = None) -> HTMLResponse:
         def build(repo):
             return render_status(get_status(repo), error=error, notice=notice, hint=hint,
                                  action=action, branch_lists=branches.list_branches(repo),
+                                 hidden_refs=hidden.effective(repo, stored_hidden()),
                                  stashes=stash.list_stashes(repo), tag_list=tags.list_tags(repo))
         html = with_repo(build)
         # After the swap: a handler may clear the panel holding the clicked button, and
@@ -218,7 +223,9 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 
     @app.get("/partials/graph", response_class=HTMLResponse)
     def partial_graph(skip: int = 0) -> str:
-        return render_graph_page(with_repo(graph.graph_page, skip))
+        stored = stored_hidden()
+        return render_graph_page(with_repo(
+            lambda repo: graph.graph_page(repo, skip, hidden=hidden.effective(repo, stored))))
 
     @app.get("/partials/commit", response_class=HTMLResponse)
     def partial_commit(sha: str) -> str:
@@ -271,7 +278,9 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 
     @app.get("/api/refs-version")
     def api_refs_version() -> JSONResponse:
-        return JSONResponse({"version": with_repo(graph.refs_version)})
+        # Hiding a branch changes the graph too.
+        version = with_repo(graph.refs_version) + ",".join(sorted(stored_hidden()))
+        return JSONResponse({"version": version})
 
     @app.post("/actions/fetch", response_class=HTMLResponse)
     async def action_fetch() -> HTMLResponse:
@@ -319,6 +328,34 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
     async def action_branch_delete_remote(request: Request) -> HTMLResponse:
         return await run_action(branches.delete_remote_branch, await field(request, "name"),
                                 notice=lambda m: m)
+
+    # --- branches hidden in the graph -------------------------------------------
+
+    async def hidden_action(op, *args) -> HTMLResponse:
+        def fn(repo):
+            path = ws.path_of(_current_repo.get())
+            refs, message = op(repo, ws.hidden_of(path), *args)
+            ws.set_hidden(path, refs)
+            return message
+        return await run_action(fn, notice=lambda m: m)
+
+    @app.post("/actions/branch/hide", response_class=HTMLResponse)
+    async def action_branch_hide(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await hidden_action(hidden.hide, form.get("kind", [""])[0], form.get("name", [""])[0])
+
+    @app.post("/actions/branch/show", response_class=HTMLResponse)
+    async def action_branch_show(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await hidden_action(hidden.show, form.get("kind", [""])[0], form.get("name", [""])[0])
+
+    @app.post("/actions/branch/show-all", response_class=HTMLResponse)
+    async def action_branch_show_all() -> HTMLResponse:
+        return await hidden_action(hidden.show_all)
+
+    @app.post("/actions/branch/hide-remotes", response_class=HTMLResponse)
+    async def action_branch_hide_remotes(request: Request) -> HTMLResponse:
+        return await hidden_action(hidden.set_remotes_hidden, await field(request, "on") == "1")
 
     # --- tags ------------------------------------------------------------------
 
@@ -457,6 +494,9 @@ _ICONS = {  # 24x24 stroke icons (drawn with currentColor)
     "up": '<path d="m6 15 6-6 6 6"/>',
     "chevron": '<path d="m9 6 6 6-6 6"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
+    "eye": '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'
+               '<path d="M3 3l18 18"/>',
     "tag": '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/>'
            '<circle cx="7.5" cy="7.5" r="1.5"/>',
     "local": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
@@ -501,7 +541,8 @@ def _status_badge(status: str) -> str:
 def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None,
                   hint: str | None = None, action: dict | None = None,
                   branch_lists: tuple[list, list[str]] | None = None,
-                  stashes: list | None = None, tag_list: list | None = None) -> str:
+                  stashes: list | None = None, tag_list: list | None = None,
+                  hidden_refs: set[str] | None = None) -> str:
     if s.branch:
         head = f'<span class="branch" title="Current branch">{_icon("branch", 13)}{escape(s.branch)}</span>'
     elif s.detached:
@@ -548,7 +589,7 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
     if stashes is not None:
         parts.append(_stash_list(s, stashes))
     if branch_lists is not None:
-        parts.append(_branch_lists(s, *branch_lists))
+        parts.append(_branch_lists(s, *branch_lists, hidden_refs=hidden_refs or set()))
     if tag_list:
         parts.append(_tag_list(tag_list))
     return "\n".join(p for p in parts if p)
@@ -623,8 +664,17 @@ def _operation_box(s: RepoStatus) -> str:
             f'<p>{escape(what)}</p><div class="op-buttons">{finish}{abort}</div></section>')
 
 
-def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
+def _visibility_button(kind: str, name: str, is_hidden: bool) -> str:
+    if is_hidden:
+        return _post("/actions/branch/show", {"kind": kind, "name": name}, label="Show in the graph",
+                     icon="eye", css="show-btn")
+    return _post("/actions/branch/hide", {"kind": kind, "name": name}, label="Hide in the graph",
+                 icon="eye-off")
+
+
+def _branch_lists(s: RepoStatus, local: list, remote: list[str], hidden_refs: set[str] = frozenset()) -> str:
     items = []
+    n_hidden = 0
     for b in local:
         counts = ""
         if b.gone:
@@ -641,23 +691,34 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             items.append(f'<li class="branch-item current" data-ref-kind="head" data-ref-name="{_attr(b.name)}">'
                          f'{where}<span class="file" title="{_attr(b.name)}">● {_wrap(b.name)}</span>{counts}</li>')
             continue
+        is_hidden = hidden.is_hidden(hidden_refs, "branch", b.name)
+        n_hidden += is_hidden
         actions = ""
         if s.branch:
             actions += _post("/actions/branch/merge", {"name": b.name}, label=f"Merge into {s.branch}",
                              icon="merge", confirm=f"Merge {b.name} into {s.branch}?")
         actions += _post("/actions/branch/delete", {"name": b.name}, label="Delete branch",
                          css="danger", icon="trash", confirm=f"Delete the branch {b.name}?")
+        if not is_hidden:  # last, so hide and show sit in the same place
+            actions += _visibility_button("branch", b.name, False)
+        css = "branch-item is-hidden" if is_hidden else "branch-item"
+        hidden_attr = ' data-hidden="1"' if is_hidden else ""
+        tip = f"Switch to {b.name}" + (" (hidden in the graph)" if is_hidden else "")
         items.append(
-            f'<li class="branch-item" data-ref-kind="branch" data-ref-name="{_attr(b.name)}">{where}'
-            f'<button type="button" class="file" title="Switch to {_attr(b.name)}" '
+            f'<li class="{css}" data-ref-kind="branch" data-ref-name="{_attr(b.name)}"{hidden_attr}>{where}'
+            f'<button type="button" class="file" title="{_attr(tip)}" '
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
-            f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
+            f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span>'
+            f'{_visibility_button("branch", b.name, True) if is_hidden else ""}</li>'
         )
+    show_all = (_post("/actions/branch/show-all", label=f"Show {n_hidden} hidden", css="small")
+                if hidden_refs - {hidden.ALL_REMOTES} else "")
     html = (f'<section class="files branches" {_collapsible("branches", len(local))}>'
-            f'<h2>{_section_toggle("Branches", len(local))}</h2>'
+            f'<h2>{_section_toggle("Branches", len(local))}{show_all}</h2>'
             f'<ul>{"".join(items)}</ul></section>' if local else "")
     if remote:
         tracked = {b.upstream for b in local if b.upstream}
+        all_hidden = hidden.ALL_REMOTES in hidden_refs
 
         def rwhere(r: str) -> str:
             title = ("on the remote and on your computer" if r in tracked else
@@ -665,18 +726,32 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             return where_icons(r in tracked, True).replace(
                 'class="where"', f'class="where" title="{_attr(title)}"', 1)
 
-        ritems = "".join(
-            f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">{rwhere(r)}'
-            f'<button type="button" class="file" title="Check out as a local branch" '
-            f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": r})}">'
-            f'{_wrap(r)}</button><span class="actions">'
-            + _post("/actions/branch/delete-remote", {"name": r}, label="Delete on the remote",
-                    css="danger", icon="trash", confirm=delete_remote_question(r))
-            + '</span></li>'
-            for r in remote
-        )
+        ritems = []
+        for r in remote:
+            is_hidden = hidden.is_hidden(hidden_refs, "remote", r)
+            toggle = "" if all_hidden else _visibility_button("remote", r, is_hidden)
+            actions = (_post("/actions/branch/delete-remote", {"name": r}, label="Delete on the remote",
+                             css="danger", icon="trash", confirm=delete_remote_question(r))
+                       + ("" if is_hidden else toggle))
+            css = "branch-item is-hidden" if is_hidden else "branch-item"
+            hidden_attr = ' data-hidden="1"' if is_hidden else ""
+            ritems.append(
+                f'<li class="{css}" data-ref-kind="remote" data-ref-name="{_attr(r)}"{hidden_attr}>{rwhere(r)}'
+                f'<button type="button" class="file" title="Check out as a local branch" '
+                f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": r})}">'
+                f'{_wrap(r)}</button><span class="actions">{actions}</span>'
+                f'{toggle if is_hidden else ""}</li>'
+            )
+        if all_hidden:
+            tools = _post("/actions/branch/hide-remotes", {"on": "0"}, label="Show remote branches in the graph",
+                          css="small")
+        else:
+            tools = _post("/actions/branch/hide-remotes", {"on": "1"}, label="Hide all in the graph",
+                          css="small")
+        note = ' <span class="muted">hidden in the graph</span>' if all_hidden else ""
         html += (f'<details class="files remotes" id="remote-branches"><summary>Remote branches '
-                 f'<span class="count">{len(remote)}</span></summary><ul>{ritems}</ul></details>')
+                 f'<span class="count">{len(remote)}</span>{note}</summary>'
+                 f'<div class="list-tools">{tools}</div><ul>{"".join(ritems)}</ul></details>')
     return html
 
 
