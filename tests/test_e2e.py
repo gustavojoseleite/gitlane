@@ -29,6 +29,13 @@ def browser():
         b.close()
 
 
+@pytest.fixture(autouse=True)
+def no_folder_window(monkeypatch):
+    """Never show a real system dialog in tests (the picker then offers the path field)."""
+    from gitlane import folder_dialog
+    monkeypatch.setattr(folder_dialog, "available", lambda: False)
+
+
 @pytest.fixture
 def serve():
     """Start gitlane for a repo; returns the base URL."""
@@ -790,6 +797,7 @@ def test_choose_folder_window(make_repo, open_page, monkeypatch):
     page.click("#picker [data-choose-folder]")
     page.wait_for_selector("#picker [data-choose-folder]:not([disabled])")
     assert tab_names(page) == ["repo"] and page.locator("#picker .banner.error").count() == 0
+    assert page.locator("#open-path").count() == 0  # the window replaces the path field
     page.click("#picker [data-choose-folder]")
     page.wait_for_selector("#tabs .tab.active:has-text('chosen')")
     assert page.locator("#picker").is_hidden()

@@ -5,7 +5,8 @@
 - **Tags:** right-click a commit → *Create tag here…* (add a message for an annotated tag);
   a *Tags* section in the sidebar; push a tag, delete it, or delete it on the remote
 - **Choose folder…** in the repo picker opens your system's own folder window
-  (zenity or kdialog on Linux, built in on macOS and Windows); the folder list stays as a fallback
+  (zenity or kdialog on Linux, built in on macOS and Windows); it replaces the path field, which
+  only appears when no folder window is available. The folder list stays
 - **Hide branches in the graph:** the eye button in the sidebar or *Hide … in the graph* in the
   branch menu; a local branch takes its remote copy with it; *Hide all* for remote branches.
   Remembered per repository; the current branch is always shown

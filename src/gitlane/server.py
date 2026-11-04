@@ -920,18 +920,19 @@ def render_picker(recent: list[Path], listing, error: str | None = None, can_cho
     parts = ['<div class="picker-inner"><h1>Open a repository</h1>']
     if error:
         parts.append(f'<div class="banner error" role="alert">{escape(error)}</div>')
-    parts.append(
-        '<form class="picker-path" data-open-form>'
-        '<label for="open-path">Path</label>'
-        f'<input id="open-path" name="path" type="text" autocomplete="off" spellcheck="false" '
-        f'placeholder="{_attr(str(Path.home() / "dev" / "project"))}">'
-        '<button type="submit" class="primary">Open</button></form>'
-    )
     if can_choose:
         parts.append(
-            '<div class="picker-choose"><button type="button" class="choose-btn" data-choose-folder '
+            '<div class="picker-choose"><button type="button" class="choose-btn primary" data-choose-folder '
             f'data-start="{_attr(str(listing.path))}">{_icon("folder", 16)}<span>Choose folder…</span></button>'
             '<span class="muted">Opens your system\'s folder window.</span></div>'
+        )
+    else:  # no folder window here (e.g. no screen): let people type the path
+        parts.append(
+            '<form class="picker-path" data-open-form>'
+            '<label for="open-path">Path</label>'
+            f'<input id="open-path" name="path" type="text" autocomplete="off" spellcheck="false" '
+            f'placeholder="{_attr(str(Path.home() / "dev" / "project"))}">'
+            '<button type="submit" class="primary">Open</button></form>'
         )
     if recent:
         repo_icon = _icon("repo")

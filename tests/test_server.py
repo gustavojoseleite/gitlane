@@ -707,9 +707,11 @@ def test_choose_folder_endpoint(make_repo, tmp_path, monkeypatch):
     c = make_client(path)
     c.get(f"/?token={TOKEN}")
     monkeypatch.setattr(folder_dialog, "available", lambda: True)
-    assert "data-choose-folder" in c.get("/partials/picker").text
+    html = c.get("/partials/picker").text
+    assert "data-choose-folder" in html and 'id="open-path"' not in html
     monkeypatch.setattr(folder_dialog, "available", lambda: False)
-    assert "data-choose-folder" not in c.get("/partials/picker").text
+    html = c.get("/partials/picker").text
+    assert "data-choose-folder" not in html and 'id="open-path"' in html  # fallback
 
     starts = []
     def pick(result):
