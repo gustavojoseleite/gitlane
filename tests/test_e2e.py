@@ -731,3 +731,32 @@ def test_merged_label_menu_offers_remote_delete(make_repo, open_page, tmp_path):
     label.click(button="right")
     labels = page.locator("#ctx-menu button").all_inner_texts()
     assert "Delete topic…" in labels and "Delete topic on origin…" in labels
+
+
+def test_create_tag_from_menu_and_delete_from_sidebar(make_repo, open_page):
+    path = make_repo()
+    page = open_page(path)
+    page.click("#graph .row >> nth=0", button="right")
+    page.wait_for_selector("#ctx-menu:not([hidden])")
+    page.click("#ctx-menu button:has-text('Create tag here')")
+    page.wait_for_selector("#modal[open] #modal-extra:not([hidden])")
+    page.fill("#modal-extra-input", "First release\nwith notes")
+    answer_modal(page, "v1.0")
+    assert "Created tag v1.0" in notice(page)
+    assert run(path, "cat-file", "-t", "v1.0") == "tag"  # annotated: it had a message
+    page.wait_for_selector("#graph .ref[data-ref-kind='tag'][data-ref-name='v1.0']")
+    item = page.wait_for_selector(".tags .tag-item[data-ref-name='v1.0']")
+    item.click()  # shows its commit
+    page.wait_for_selector("#detail .commit-detail")
+    # Other dialogs don't show the extra field
+    page.click("#graph .row >> nth=0", button="right")
+    page.click("#ctx-menu button:has-text('Create branch here')")
+    page.wait_for_selector("#modal[open]")
+    assert page.is_hidden("#modal-extra")
+    answer_modal(page, accept=False)
+    page.click(".tags .tag-item[data-ref-name='v1.0']", button="right")
+    page.click("#ctx-menu button:has-text('Delete tag v1.0…')")
+    answer_modal(page)
+    page.wait_for_selector(".banner.notice:has-text('Deleted tag v1.0')")
+    assert run(path, "tag") == ""
+    page.wait_for_selector(".tags", state="detached")  # no tags left: no section

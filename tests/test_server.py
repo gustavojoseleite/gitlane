@@ -641,3 +641,38 @@ def test_branch_location_icons(make_repo, tmp_path):
     assert "main — on your computer and on origin (same commit)" in graph_html
     assert 'data-ref-name="origin/main"' not in graph_html  # folded into "main"
     assert "only-remote — only on the remote" in graph_html.replace("origin/only-remote", "only-remote")
+
+
+def test_tag_endpoints_and_sidebar(make_repo, tmp_path):
+    from .conftest import run
+    path = make_repo()
+    sha = run(path, "rev-parse", "HEAD")
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    assert 'data-section="tags"' not in c.get("/partials/status").text  # no tags: no section
+    r = c.post("/actions/tag/create", data={"name": "v1.0", "sha": sha, "message": "First <release>"})
+    assert f"Created tag v1.0 at {sha[:7]}." in r.text
+    assert 'data-section="tags"' in r.text and f'data-ref-sha="{sha}"' in r.text
+    assert "First &lt;release&gt;" in r.text  # message escaped in the tooltip
+    assert "Delete the tag v1.0?" in r.text  # delete asks first
+    assert "already exists" in c.post("/actions/tag/create", data={"name": "v1.0", "sha": sha}).text
+    assert "not a valid tag name" in c.post("/actions/tag/create", data={"name": "a b", "sha": sha}).text
+    assert "Pushed tag v1.0 to origin." in c.post("/actions/tag/push", data={"name": "v1.0"}).text
+    assert run(tmp_path / "server.git", "tag") == "v1.0"
+    r = c.post("/actions/tag/delete-remote", data={"name": "v1.0"})
+    assert "Deleted tag v1.0 on origin." in r.text
+    assert "Deleted tag v1.0" in c.post("/actions/tag/delete", data={"name": "v1.0"}).text
+    assert run(path, "tag") == ""
+    assert c.get("/actions/tag/delete").status_code == 405
+
+
+def test_tag_label_in_graph(make_repo):
+    from .conftest import run
+    path = make_repo()
+    run(path, "tag", "v9")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/graph").text
+    assert 'data-ref-kind="tag" data-ref-name="v9"' in html and "🏷" not in html

@@ -64,6 +64,7 @@ Remote operations (push/pull/fetch) must use the user's existing Git setup (SSH 
   - Right-click a branch label → checkout, merge into current, delete (confirm)
 - **Branches:** create, switch, merge, delete
 - **Stash:** save (with optional message), list, apply, pop, drop (confirm)
+- **Tags (v0.2):** create at a commit (lightweight, or annotated with a message), list in the sidebar, push one tag, delete locally (confirm), delete on the remote (confirm)
 - **Merge conflicts (simple):** when a merge stops with conflicts, show the conflicted files and offer **"Abort merge"** or **"I resolved it in my editor → mark resolved and commit"**
 - **Refresh:** UI refreshes after every action, when the browser tab regains focus, and via a Refresh button
 

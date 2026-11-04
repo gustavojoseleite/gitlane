@@ -422,6 +422,8 @@ kbd.hint {
 .where .icon { display: block; }
 .branch-item > .where { color: var(--muted); gap: 2px; opacity: 1; cursor: default; }
 .branch-item.current > .where { color: var(--accent); }
+.tag-item > .tag-icon { flex: none; color: var(--yellow); }
+.ref-tag .icon { display: inline-block; vertical-align: -1px; margin-right: 3px; }
 .ref-head { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 650; }
 .ref-branch { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); background: var(--accent-soft); }
 .ref-remote { color: var(--muted); background: transparent; }
@@ -598,6 +600,13 @@ table.diff tr.meta td { color: var(--muted); font-style: italic; }
 }
 .modal input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .modal .modal-error { color: var(--red); font-size: 12px; }
+.modal-extra { display: flex; flex-direction: column; gap: 4px; margin-left: 46px; font-size: 12px; color: var(--fg-2); }
+.modal-extra[hidden] { display: none; }
+.modal-extra textarea {
+  font: 13px var(--font); color: var(--fg); background: var(--bg); resize: vertical;
+  border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px;
+}
+.modal-extra textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .modal-actions { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 8px; }
 .modal-actions button { height: 32px; padding: 0 16px; }
 button.danger-solid { background: var(--red); border-color: var(--red); color: #fff; }

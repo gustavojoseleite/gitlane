@@ -161,6 +161,8 @@ SOFTWARE.</pre>
       </div>
       <p id="modal-text"></p>
       <input id="modal-input" type="text" autocomplete="off" spellcheck="false" hidden>
+      <label id="modal-extra" class="modal-extra" hidden><span id="modal-extra-label"></span>
+        <textarea id="modal-extra-input" rows="3" spellcheck="true"></textarea></label>
       <p id="modal-error" class="modal-error" role="alert" hidden></p>
       <div class="modal-actions">
         <button type="submit" value="ok" id="modal-ok" class="primary">OK</button>
@@ -470,6 +472,9 @@ SOFTWARE.</pre>
       const modalText = document.getElementById("modal-text");
       const modalInput = document.getElementById("modal-input");
       const modalError = document.getElementById("modal-error");
+      const modalExtra = document.getElementById("modal-extra");
+      const modalExtraLabel = document.getElementById("modal-extra-label");
+      const modalExtraInput = document.getElementById("modal-extra-input");
       const modalOk = document.getElementById("modal-ok");
       const modalCancel = document.getElementById("modal-cancel");
 
@@ -481,8 +486,10 @@ SOFTWARE.</pre>
         return label === "HARD reset" ? "Reset" : label;
       };
 
-      // ask({question, danger, input, value, required, ok}) -> Promise: true/false, or the text/null.
-      const ask = ({ question, danger = false, input = false, value = "", required = false, ok }) =>
+      // ask({question, danger, input, value, required, ok, extra}) -> Promise: true/false, or the
+      // text/null. With extra (a label), a second, multi-line field is shown and the answer is
+      // [text, extraText] or null.
+      const ask = ({ question, danger = false, input = false, value = "", required = false, ok, extra }) =>
         new Promise((resolve) => {
           const [title, ...rest] = question.split(/\n\s*\n/);
           modalTitle.textContent = title.trim();
@@ -493,12 +500,17 @@ SOFTWARE.</pre>
           modalOk.textContent = ok || (input ? "OK" : okLabelFor(title));
           modalInput.hidden = !input;
           modalInput.value = value;
+          modalExtra.hidden = !extra;
+          modalExtraLabel.textContent = extra || "";
+          modalExtraInput.value = "";
           modalError.hidden = true;
           modal.returnValue = "";
           const done = () => {
             modal.removeEventListener("close", done);
             const accepted = modal.returnValue === "ok";
-            resolve(input ? (accepted ? modalInput.value : null) : accepted);
+            if (!input) resolve(accepted);
+            else if (!accepted) resolve(null);
+            else resolve(extra ? [modalInput.value, modalExtraInput.value] : modalInput.value);
           };
           modal.addEventListener("close", done);
           modal.showModal();
@@ -530,6 +542,14 @@ SOFTWARE.</pre>
         if (confirmText && !(await ask({ question: confirmText, danger }))) return;
         htmx.ajax("POST", url, { target: "#status", values });
       };
+      // A tag in the sidebar: show its commit (and scroll to it if it's loaded in the graph).
+      document.body.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-show-sha]");
+        if (!b) return;
+        showCommit(b.dataset.showSha);
+        graphEl.querySelector(`.row[data-sha="${b.dataset.showSha}"]`)?.scrollIntoView({ block: "nearest" });
+      });
+
       const closeMenu = () => { menu.hidden = true; menu.innerHTML = ""; };
 
       // Buttons that ask a question first (New branch, Stash…).
@@ -576,6 +596,13 @@ SOFTWARE.</pre>
               const name = await ask({ question: `New branch at ${short}\n\nName for the branch:`,
                                        input: true, required: true, ok: "Create branch" });
               if (name) post("/actions/branch/create", { name, start: sha });
+          } },
+          { label: "Create tag here…", run: async () => {
+              const answer = await ask({
+                question: `New tag at ${short}\n\nName for the tag (for example v1.2.0). With a ` +
+                          "message it becomes an annotated tag, which also records who made it and when.",
+                input: true, required: true, ok: "Create tag", extra: "Message (optional)" });
+              if (answer) post("/actions/tag/create", { name: answer[0], sha, message: answer[1] });
           } },
           "-",
           { label: `Cherry-pick onto ${onto}`, disabled: mergeNote,
@@ -654,9 +681,22 @@ SOFTWARE.</pre>
           return [{ label: `${name} is the current branch`, disabled: "Already checked out", run: () => {} },
                   ...(sha ? ["-", ...commitItems(sha, false).slice(1, 2)] : []), ...remoteExtra];
         }
-        if (kind === "tag" && sha) {
-          return [{ label: `Checkout tag ${name}`, run: () => post("/actions/commit/checkout", { sha },
-              `Check out tag ${name}?\n\nYou will be in "detached HEAD".`) }];
+        if (kind === "tag") {
+          return [
+            ...(sha ? [{ label: `Checkout tag ${name}`, run: () => post("/actions/commit/checkout", { sha },
+                `Check out tag ${name}?\n\nYou will be in "detached HEAD".`) }, "-"] : []),
+            { label: `Push tag ${name} to the remote`, run: () => post("/actions/tag/push", { name }) },
+            { label: "Copy tag name", run: () => navigator.clipboard?.writeText(name) },
+            "-",
+            { label: `Delete tag ${name}…`, danger: true,
+              run: () => post("/actions/tag/delete", { name },
+                `Delete the tag ${name}?\n\nOnly the tag on your computer is deleted. ` +
+                "If you pushed it, it stays on the remote.", true) },
+            { label: `Delete tag ${name} on the remote…`, danger: true,
+              run: () => post("/actions/tag/delete-remote", { name },
+                `Delete the tag ${name} on the remote?\n\nIt is removed from the server for ` +
+                "everyone. Your local tag is kept.", true) },
+          ];
         }
         return null;
       };
@@ -666,8 +706,8 @@ SOFTWARE.</pre>
         const row = e.target.closest(".row[data-sha]");
         let items = null;
         if (row?.dataset.stashIndex !== undefined) items = stashItems(row.dataset.stashIndex, row.dataset.sha);
-        else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha,
-                                       ref.dataset.refRemote);
+        else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName,
+                                       row?.dataset.sha || ref.dataset.refSha, ref.dataset.refRemote);
         if (!items && row) items = commitItems(row.dataset.sha, row.dataset.merge === "1");
         if (!items) return;
         e.preventDefault();

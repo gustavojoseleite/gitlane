@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Tags:** right-click a commit → *Create tag here…* (add a message for an annotated tag);
+  a *Tags* section in the sidebar; push a tag, delete it, or delete it on the remote
+
 ## 0.1.1 — 2026-11-04
 
 - **Windows is supported** (tested in CI on Windows, macOS and Linux); settings live in `%APPDATA%\gitlane`

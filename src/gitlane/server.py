@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, blobs, branches, git_ops, graph, stash, workspace
+from . import __version__, blobs, branches, git_ops, graph, stash, tags, workspace
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 from .workspace import Workspace
 
@@ -98,7 +98,7 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         def build(repo):
             return render_status(get_status(repo), error=error, notice=notice, hint=hint,
                                  action=action, branch_lists=branches.list_branches(repo),
-                                 stashes=stash.list_stashes(repo))
+                                 stashes=stash.list_stashes(repo), tag_list=tags.list_tags(repo))
         html = with_repo(build)
         # After the swap: a handler may clear the panel holding the clicked button, and
         # htmx needs that button in the page to place the out-of-band toolbar.
@@ -320,6 +320,26 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         return await run_action(branches.delete_remote_branch, await field(request, "name"),
                                 notice=lambda m: m)
 
+    # --- tags ------------------------------------------------------------------
+
+    @app.post("/actions/tag/create", response_class=HTMLResponse)
+    async def action_tag_create(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(tags.create_tag, form.get("name", [""])[0], form.get("sha", [""])[0],
+                                form.get("message", [""])[0], notice=lambda m: m)
+
+    @app.post("/actions/tag/delete", response_class=HTMLResponse)
+    async def action_tag_delete(request: Request) -> HTMLResponse:
+        return await run_action(tags.delete_tag, await field(request, "name"), notice=lambda m: m)
+
+    @app.post("/actions/tag/push", response_class=HTMLResponse)
+    async def action_tag_push(request: Request) -> HTMLResponse:
+        return await run_action(tags.push_tag, await field(request, "name"), notice=lambda m: m)
+
+    @app.post("/actions/tag/delete-remote", response_class=HTMLResponse)
+    async def action_tag_delete_remote(request: Request) -> HTMLResponse:
+        return await run_action(tags.delete_remote_tag, await field(request, "name"), notice=lambda m: m)
+
     @app.post("/actions/commit/checkout", response_class=HTMLResponse)
     async def action_commit_checkout(request: Request) -> HTMLResponse:
         return await run_action(branches.checkout_commit, await field(request, "sha"), notice=lambda m: m)
@@ -437,6 +457,8 @@ _ICONS = {  # 24x24 stroke icons (drawn with currentColor)
     "up": '<path d="m6 15 6-6 6 6"/>',
     "chevron": '<path d="m9 6 6 6-6 6"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
+    "tag": '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/>'
+           '<circle cx="7.5" cy="7.5" r="1.5"/>',
     "local": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
     "cloud": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>',
     "cloud-off": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>'
@@ -479,7 +501,7 @@ def _status_badge(status: str) -> str:
 def render_status(s: RepoStatus, error: str | None = None, notice: str | None = None,
                   hint: str | None = None, action: dict | None = None,
                   branch_lists: tuple[list, list[str]] | None = None,
-                  stashes: list | None = None) -> str:
+                  stashes: list | None = None, tag_list: list | None = None) -> str:
     if s.branch:
         head = f'<span class="branch" title="Current branch">{_icon("branch", 13)}{escape(s.branch)}</span>'
     elif s.detached:
@@ -527,6 +549,8 @@ def render_status(s: RepoStatus, error: str | None = None, notice: str | None = 
         parts.append(_stash_list(s, stashes))
     if branch_lists is not None:
         parts.append(_branch_lists(s, *branch_lists))
+    if tag_list:
+        parts.append(_tag_list(tag_list))
     return "\n".join(p for p in parts if p)
 
 
@@ -553,6 +577,30 @@ def _stash_list(s: RepoStatus, stashes: list) -> str:
         )
     return (f'<section class="files stashes" {_collapsible("stashes", len(stashes))}>'
             f'<h2>{_section_toggle("Stashes", len(stashes))}</h2>'
+            f'<ul>{"".join(items)}</ul></section>')
+
+
+def delete_tag_question(name: str) -> str:
+    return (f"Delete the tag {name}?\n\nOnly the tag on your computer is deleted. "
+            "If you pushed it, it stays on the remote.")
+
+
+def _tag_list(tag_list: list) -> str:
+    icon = _icon("tag", 12).replace('class="icon"', 'class="icon tag-icon"', 1)
+    items = []
+    for t in tag_list:
+        title = f"{t.name} — {t.message}" if t.message else f"{t.name} (at {t.sha[:7]})"
+        actions = (_post("/actions/tag/push", {"name": t.name}, label="Push tag to the remote", icon="push")
+                   + _post("/actions/tag/delete", {"name": t.name}, label="Delete tag", css="danger",
+                           icon="trash", confirm=delete_tag_question(t.name)))
+        items.append(
+            f'<li class="branch-item tag-item" data-ref-kind="tag" data-ref-name="{_attr(t.name)}" '
+            f'data-ref-sha="{_attr(t.sha)}">{icon}'
+            f'<button type="button" class="file" title="{_attr(title)}" data-show-sha="{_attr(t.sha)}">'
+            f'{_wrap(t.name)}</button><span class="actions">{actions}</span></li>'
+        )
+    return (f'<section class="files tags" {_collapsible("tags", len(tag_list))}>'
+            f'<h2>{_section_toggle("Tags", len(tag_list))}</h2>'
             f'<ul>{"".join(items)}</ul></section>')
 
 
@@ -710,7 +758,7 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
 
 
 COLLAPSE_AFTER = 15  # long lists start minimized (the user's own choice wins)
-_AUTO_COLLAPSE = {"untracked", "branches", "stashes"}
+_AUTO_COLLAPSE = {"untracked", "branches", "stashes", "tags"}
 
 
 def _collapsible(section: str, count: int) -> str:
@@ -936,7 +984,7 @@ def _where_text(r: graph.Ref) -> str:
 def render_refs(refs: list[graph.Ref]) -> str:
     labels = {
         "head": ("ref ref-head", "●&nbsp;"), "branch": ("ref ref-branch", ""),
-        "remote": ("ref ref-remote", ""), "tag": ("ref ref-tag", "🏷&nbsp;"),
+        "remote": ("ref ref-remote", ""), "tag": ("ref ref-tag", _icon("tag", 11)),
         "detached": ("ref ref-head", "HEAD"), "stash": ("ref ref-stash", ""),
     }
     out = []
