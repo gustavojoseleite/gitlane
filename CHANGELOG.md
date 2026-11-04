@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 — 2026-11-04
+
+- **Windows is supported** (tested in CI on Windows, macOS and Linux); settings live in `%APPDATA%\gitlane`
+- Works on Python 3.10 and 3.11 again (0.1.0 failed to start there)
+- Ctrl+C stops gitlane quietly instead of printing an error
+- Branch labels show where a branch is: on your computer, on the remote, or both;
+  a branch and its remote copy on the same commit share one label
+- Stash pop with conflicts says the stash was kept, on newer Git versions too
+- Clearer hint when the remote server can't be reached (newer curl wording)
+- Commit dates no longer get cut off with wider fonts
+
 ## 0.1.0 — 2026-11-03
 
 First version.
