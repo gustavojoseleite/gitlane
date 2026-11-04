@@ -617,3 +617,26 @@ def test_favicon_served(client):
     r = client.get("/static/gitlane.svg")
     assert r.status_code == 200 and r.text.startswith("<svg")
     assert 'rel="icon"' in client.get("/").text
+
+
+def test_branch_location_icons(make_repo, tmp_path):
+    from .conftest import run
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    run(path, "push", "-q", "origin", "main:only-remote")
+    run(path, "branch", "only-local")
+    run(path, "fetch", "-q")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert 'title="on your computer and on origin (origin/main)"' in html
+    assert 'title="only on your computer (not pushed yet)"' in html
+    assert 'title="only on the remote (click to get a local copy)"' in html
+    assert 'title="on the remote and on your computer"' in html  # origin/main is tracked
+    graph_html = c.get("/partials/graph").text
+    assert 'data-ref-name="main" data-ref-remote="origin/main"' in graph_html
+    assert "main — on your computer and on origin (same commit)" in graph_html
+    assert 'data-ref-name="origin/main"' not in graph_html  # folded into "main"
+    assert "only-remote — only on the remote" in graph_html.replace("origin/only-remote", "only-remote")

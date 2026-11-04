@@ -416,6 +416,12 @@ kbd.hint {
   border: 1px solid var(--border-strong); white-space: nowrap; max-width: 14em; overflow: hidden; text-overflow: ellipsis;
   color: var(--fg-2); background: var(--bg);
 }
+.ref { display: inline-flex; align-items: center; gap: 3px; }
+.ref .ref-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.where { display: inline-flex; align-items: center; gap: 1px; flex: none; opacity: .8; }
+.where .icon { display: block; }
+.branch-item > .where { color: var(--muted); gap: 2px; opacity: 1; cursor: default; }
+.branch-item.current > .where { color: var(--accent); }
 .ref-head { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 650; }
 .ref-branch { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); background: var(--accent-soft); }
 .ref-remote { color: var(--muted); background: transparent; }

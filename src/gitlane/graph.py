@@ -34,6 +34,28 @@ _LOG_FORMAT = _RECORD + _FIELD.join(["%H", "%P", "%an", "%ae", "%at", "%D", "%s"
 class Ref:
     kind: str  # "head" (current branch), "branch", "remote", "tag", "detached"
     name: str
+    # For a local branch whose upstream (e.g. "origin/main") is on the same commit:
+    # the two are shown as one label that is "on your computer and on the remote".
+    remote: str | None = None
+
+
+def upstreams(repo: git.Repo) -> dict[str, str]:
+    """Local branch name -> its upstream ("main" -> "origin/main")."""
+    out = repo.git.for_each_ref("--format=%(refname:short)%00%(upstream:short)", "refs/heads")
+    pairs = (line.split("\0", 1) for line in out.splitlines() if "\0" in line)
+    return {name: up for name, up in pairs if up}
+
+
+def merge_tracking(refs: list[Ref], ups: dict[str, str]) -> list[Ref]:
+    """Fold "origin/main" into "main" when main tracks it and both are on this commit."""
+    remote_names = {r.name for r in refs if r.kind == "remote"}
+    folded = set()
+    for r in refs:
+        up = ups.get(r.name) if r.kind in ("head", "branch") else None
+        if up in remote_names and up not in folded:
+            r.remote = up
+            folded.add(up)
+    return [r for r in refs if not (r.kind == "remote" and r.name in folded)]
 
 
 @dataclass
@@ -232,6 +254,10 @@ def graph_page(repo: git.Repo, skip: int = 0, limit: int = PAGE_SIZE) -> GraphPa
     """
     skip = max(0, skip)
     commits = insert_stashes(read_commits(repo, skip + limit + 1), read_stashes(repo))
+    ups = upstreams(repo)
+    for c in commits:
+        if c.refs:
+            c.refs = merge_tracking(c.refs, ups)
     rows = layout(commits[: skip + limit])
     return GraphPage(rows=rows[skip:], skip=skip, has_more=len(commits) > skip + limit)
 
@@ -279,7 +305,8 @@ def commit_detail(repo: git.Repo, sha: str) -> CommitDetail:
     h, parents, author, email, ts, deco, subject, body = raw.split(_FIELD, 7)
     commit = Commit(
         sha=h, parents=parents.split(), author=author, email=email, timestamp=int(ts),
-        refs=parse_refs(deco, [r.name for r in repo.remotes]), subject=subject,
+        refs=merge_tracking(parse_refs(deco, [r.name for r in repo.remotes]), upstreams(repo)),
+        subject=subject,
     )
     base = commit.parents[0] if commit.parents else None
     if base:

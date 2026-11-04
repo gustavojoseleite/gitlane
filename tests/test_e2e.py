@@ -714,3 +714,20 @@ def test_minimize_sections(make_repo, open_page):
     page.wait_for_selector("#status section.untracked")
     assert page.locator("#status section.untracked ul").is_visible()
     assert page.locator("#status section.branches ul").is_hidden()
+
+
+def test_merged_label_menu_offers_remote_delete(make_repo, open_page, tmp_path):
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    run(path, "checkout", "-q", "-b", "topic")
+    run(path, "push", "-q", "-u", "origin", "topic")
+    run(path, "checkout", "-q", "main")
+    page = open_page(path)
+    label = page.locator("#graph .ref[data-ref-name='topic']")
+    assert label.get_attribute("data-ref-remote") == "origin/topic"
+    assert label.locator(".where svg").count() == 2  # laptop + cloud
+    label.click(button="right")
+    labels = page.locator("#ctx-menu button").all_inner_texts()
+    assert "Delete topic…" in labels and "Delete topic on origin…" in labels

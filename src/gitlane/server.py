@@ -437,6 +437,10 @@ _ICONS = {  # 24x24 stroke icons (drawn with currentColor)
     "up": '<path d="m6 15 6-6 6 6"/>',
     "chevron": '<path d="m9 6 6 6-6 6"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
+    "local": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+    "cloud": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>',
+    "cloud-off": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>'
+                 '<path d="M3 3l18 18"/>',
 }
 
 
@@ -579,9 +583,15 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             counts = '<span class="muted" title="Deleted on the remote">gone</span>'
         elif b.ahead or b.behind:
             counts = f'<span class="muted">↑{b.ahead} ↓{b.behind}</span>'
+        on_remote = "gone" if b.gone else bool(b.upstream)
+        where = where_icons(True, on_remote)
+        where_title = ("on your computer; deleted on the remote" if b.gone else
+                       f"on your computer and on {b.upstream.split('/')[0]} ({b.upstream})" if b.upstream else
+                       "only on your computer (not pushed yet)")
+        where = where.replace('class="where"', f'class="where" title="{_attr(where_title)}"', 1)
         if b.current:
             items.append(f'<li class="branch-item current" data-ref-kind="head" data-ref-name="{_attr(b.name)}">'
-                         f'<span class="file" title="{_attr(b.name)}">● {_wrap(b.name)}</span>{counts}</li>')
+                         f'{where}<span class="file" title="{_attr(b.name)}">● {_wrap(b.name)}</span>{counts}</li>')
             continue
         actions = ""
         if s.branch:
@@ -590,7 +600,7 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
         actions += _post("/actions/branch/delete", {"name": b.name}, label="Delete branch",
                          css="danger", icon="trash", confirm=f"Delete the branch {b.name}?")
         items.append(
-            f'<li class="branch-item" data-ref-kind="branch" data-ref-name="{_attr(b.name)}">'
+            f'<li class="branch-item" data-ref-kind="branch" data-ref-name="{_attr(b.name)}">{where}'
             f'<button type="button" class="file" title="Switch to {_attr(b.name)}" '
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": b.name})}">'
             f'{_wrap(b.name)}</button>{counts}<span class="actions">{actions}</span></li>'
@@ -599,8 +609,16 @@ def _branch_lists(s: RepoStatus, local: list, remote: list[str]) -> str:
             f'<h2>{_section_toggle("Branches", len(local))}</h2>'
             f'<ul>{"".join(items)}</ul></section>' if local else "")
     if remote:
+        tracked = {b.upstream for b in local if b.upstream}
+
+        def rwhere(r: str) -> str:
+            title = ("on the remote and on your computer" if r in tracked else
+                     "only on the remote (click to get a local copy)")
+            return where_icons(r in tracked, True).replace(
+                'class="where"', f'class="where" title="{_attr(title)}"', 1)
+
         ritems = "".join(
-            f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">'
+            f'<li class="branch-item" data-ref-kind="remote" data-ref-name="{_attr(r)}">{rwhere(r)}'
             f'<button type="button" class="file" title="Check out as a local branch" '
             f'hx-post="/actions/branch/checkout" hx-target="#status" hx-vals="{_attr({"name": r})}">'
             f'{_wrap(r)}</button><span class="actions">'
@@ -892,6 +910,29 @@ def render_row_svg(row: graph.Row) -> str:
             f'aria-hidden="true">{"".join(parts)}</svg>')
 
 
+def where_icons(local: bool, remote: bool | str) -> str:
+    """Laptop = on your computer, cloud = on the remote (both = in sync there).
+
+    ``remote`` may be "gone": the upstream was deleted on the server.
+    """
+    icons = []
+    if local:
+        icons.append(_icon("local", 12))
+    if remote == "gone":
+        icons.append(_icon("cloud-off", 12))
+    elif remote:
+        icons.append(_icon("cloud", 12))
+    return f'<span class="where" aria-hidden="true">{"".join(icons)}</span>' if icons else ""
+
+
+def _where_text(r: graph.Ref) -> str:
+    if r.kind == "remote":
+        return f"{r.name} — only on the remote"
+    if r.remote:
+        return f"{r.name} — on your computer and on {r.remote.split('/')[0]} (same commit)"
+    return f"{r.name} — on your computer"
+
+
 def render_refs(refs: list[graph.Ref]) -> str:
     labels = {
         "head": ("ref ref-head", "●&nbsp;"), "branch": ("ref ref-branch", ""),
@@ -901,9 +942,15 @@ def render_refs(refs: list[graph.Ref]) -> str:
     out = []
     for r in refs:
         css, prefix = labels[r.kind]
-        name = "" if r.kind == "detached" else escape(r.name)
-        out.append(f'<span class="{css}" title="{_attr(r.name)} ({escape(r.kind)})" data-ref-kind="{escape(r.kind)}" '
-                   f'data-ref-name="{_attr(r.name)}">{prefix}{name}</span>')
+        name = "" if r.kind == "detached" else f'<span class="ref-name">{escape(r.name)}</span>'
+        if r.kind in ("head", "branch", "remote"):
+            icons = where_icons(local=r.kind != "remote", remote=r.kind == "remote" or bool(r.remote))
+            title = _where_text(r)
+        else:
+            icons, title = "", f"{r.name} ({r.kind})"
+        remote_attr = f' data-ref-remote="{_attr(r.remote)}"' if r.remote else ""
+        out.append(f'<span class="{css}" title="{_attr(title)}" data-ref-kind="{escape(r.kind)}" '
+                   f'data-ref-name="{_attr(r.name)}"{remote_attr}>{icons}{prefix}{name}</span>')
     return "".join(out)
 
 

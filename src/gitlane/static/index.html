@@ -613,7 +613,18 @@ SOFTWARE.</pre>
         ];
       };
 
-      const refItems = (kind, name, sha) => {
+      // "Delete X on origin…" for a remote branch name like "origin/x".
+      const deleteRemoteItem = (full) => {
+        const slash = full.indexOf("/");
+        const [remote, rbranch] = [full.slice(0, slash), full.slice(slash + 1)];
+        return { label: `Delete ${rbranch} on ${remote}…`, danger: true,
+          run: () => post("/actions/branch/delete-remote", { name: full },
+            `Delete ${rbranch} on ${remote}?\n\nThe branch is removed from the server for everyone. ` +
+            "Commits that are only on it may be lost. Your local branches are kept.", true) };
+      };
+
+      const refItems = (kind, name, sha, remoteName) => {
+        const remoteExtra = remoteName ? ["-", deleteRemoteItem(remoteName)] : [];
         const branch = currentBranch();
         const mergeItem = {
           label: branch ? `Merge ${name} into ${branch}` : "Merge (switch to a branch first)",
@@ -627,25 +638,21 @@ SOFTWARE.</pre>
             "-",
             { label: `Delete ${name}…`, danger: true,
               run: () => post("/actions/branch/delete", { name }, `Delete the branch ${name}?`, true) },
+            ...remoteExtra,
           ];
         }
         if (kind === "remote") {
-          const slash = name.indexOf("/");
-          const [remote, rbranch] = [name.slice(0, slash), name.slice(slash + 1)];
           return [
             { label: `Checkout ${name} as a local branch`,
               run: () => post("/actions/branch/checkout", { name }) },
             mergeItem,
             "-",
-            { label: `Delete ${rbranch} on ${remote}…`, danger: true,
-              run: () => post("/actions/branch/delete-remote", { name },
-                `Delete ${rbranch} on ${remote}?\n\nThe branch is removed from the server for everyone. ` +
-                "Commits that are only on it may be lost. Your local branches are kept.", true) },
+            deleteRemoteItem(name),
           ];
         }
         if (kind === "head") {
           return [{ label: `${name} is the current branch`, disabled: "Already checked out", run: () => {} },
-                  ...(sha ? ["-", ...commitItems(sha, false).slice(1, 2)] : [])];
+                  ...(sha ? ["-", ...commitItems(sha, false).slice(1, 2)] : []), ...remoteExtra];
         }
         if (kind === "tag" && sha) {
           return [{ label: `Checkout tag ${name}`, run: () => post("/actions/commit/checkout", { sha },
@@ -659,7 +666,8 @@ SOFTWARE.</pre>
         const row = e.target.closest(".row[data-sha]");
         let items = null;
         if (row?.dataset.stashIndex !== undefined) items = stashItems(row.dataset.stashIndex, row.dataset.sha);
-        else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha);
+        else if (ref) items = refItems(ref.dataset.refKind, ref.dataset.refName, row?.dataset.sha,
+                                       ref.dataset.refRemote);
         if (!items && row) items = commitItems(row.dataset.sha, row.dataset.merge === "1");
         if (!items) return;
         e.preventDefault();

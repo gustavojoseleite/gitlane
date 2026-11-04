@@ -334,3 +334,33 @@ def test_large_repo_pages_are_fast(tmp_path, repo_at):
     # Generous limits so slow CI machines don't flake; typically far lower.
     assert t1 - t0 < 2, f"first page took {t1 - t0:.2f}s"
     assert t2 - t1 < 5, f"last page took {t2 - t1:.2f}s"
+
+
+# --- local / remote / both -----------------------------------------------------------
+
+def test_merge_tracking_rules():
+    from gitlane.graph import merge_tracking
+    refs = [Ref("head", "main"), Ref("remote", "origin/main"), Ref("remote", "origin/x"),
+            Ref("branch", "y"), Ref("remote", "origin/y"), Ref("tag", "v1")]
+    out = merge_tracking(refs, {"main": "origin/main", "x": "origin/x"})
+    assert [(r.kind, r.name, r.remote) for r in out] == [
+        ("head", "main", "origin/main"),  # tracks it, same commit -> one label
+        ("remote", "origin/x", None),     # x itself isn't on this commit
+        ("branch", "y", None),            # same name, but y doesn't track origin/y
+        ("remote", "origin/y", None),
+        ("tag", "v1", None),
+    ]
+
+
+def test_graph_shows_both_or_separate(make_repo, repo_at, tmp_path):
+    path = make_repo()
+    run(tmp_path, "init", "-q", "--bare", "server.git")
+    run(path, "remote", "add", "origin", str(tmp_path / "server.git"))
+    run(path, "push", "-q", "-u", "origin", "main")
+    page = graph.graph_page(repo_at(path))
+    assert page.rows[0].commit.refs == [Ref("head", "main", remote="origin/main")]
+    commit(path, "new.txt")  # main moves ahead of origin/main
+    rows = graph.graph_page(repo_at(path)).rows
+    assert rows[0].commit.refs == [Ref("head", "main")]
+    assert rows[1].commit.refs == [Ref("remote", "origin/main")]
+    assert graph.commit_detail(repo_at(path), rows[1].commit.sha).commit.refs == [Ref("remote", "origin/main")]
