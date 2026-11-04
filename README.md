@@ -19,7 +19,7 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 - **Tags** — create (lightweight or with a message), push, delete here or on the remote
 - **Stash** — save (including untracked files), apply, pop, drop, and look inside a stash
 - **Merge conflicts** — see the conflicted files, then *abort* or *mark resolved and commit*
-- **Tabs** — several repositories at once; recent repos and a folder browser to open more
+- **Tabs** — several repositories at once; open more with your system's *Choose folder* window, recent repos or the built-in folder browser
 - **Safe by default** — dangerous actions ask first; runs only on your computer (see [Security](#security))
 - Light and dark theme (follows your system)
 

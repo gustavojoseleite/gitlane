@@ -339,20 +339,39 @@ SOFTWARE.</pre>
         htmx.ajax("GET", "/partials/picker" + (path ? `?path=${encodeURIComponent(path)}` : ""), "#picker");
       };
 
-      const openRepo = async (path) => {
-        const data = await api("/api/workspace/open", { path });
-        if (data.error) {
-          picker.querySelector(".banner.error")?.remove();
-          const b = document.createElement("div");
-          b.className = "banner error";
-          b.setAttribute("role", "alert");
-          b.textContent = data.error;
-          picker.querySelector("h1")?.after(b);
-          return;
-        }
+      const pickerError = (text) => {
+        picker.querySelector(".banner.error")?.remove();
+        if (!text) return;
+        const b = document.createElement("div");
+        b.className = "banner error";
+        b.setAttribute("role", "alert");
+        b.textContent = text;
+        picker.querySelector("h1")?.after(b);
+      };
+      const opened = (data) => {
+        if (data.error) { pickerError(data.error); return; }
         tabs = data.tabs;
         activate(data.tab.id, false);
       };
+      const openRepo = async (path) => opened(await api("/api/workspace/open", { path }));
+
+      // "Choose folder…": the server shows the system's folder window and waits for it.
+      picker.addEventListener("click", async (e) => {
+        const b = e.target.closest("[data-choose-folder]");
+        if (!b || b.disabled) return;
+        const label = b.querySelector("span");
+        const before = label.textContent;
+        b.disabled = true;
+        label.textContent = "Waiting for the folder window…";
+        pickerError(null);
+        try {
+          const data = await api("/api/workspace/choose", { start: b.dataset.start || "" });
+          if (!data.cancelled) opened(data);
+        } finally {
+          b.disabled = false;
+          label.textContent = before;
+        }
+      });
 
       const closeTab = async (id) => {
         const data = await api("/api/workspace/close", { id });

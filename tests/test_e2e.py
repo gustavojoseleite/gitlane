@@ -777,3 +777,19 @@ def test_hide_and_show_branch(make_repo, open_page):
     page.click(".branches .branch-item[data-ref-name='side'] .show-btn")
     page.wait_for_selector("#graph .row:has-text('side work')")
     assert page.locator(".branches .is-hidden").count() == 0
+
+
+def test_choose_folder_window(make_repo, open_page, monkeypatch):
+    from gitlane import folder_dialog
+    other = make_repo("chosen")
+    monkeypatch.setattr(folder_dialog, "available", lambda: True)
+    answers = iter([None, other])  # first Cancel, then a folder
+    monkeypatch.setattr(folder_dialog, "choose_folder", lambda start=None: next(answers))
+    page = open_page(make_repo())
+    page.click("#tabs .tab-new")
+    page.click("#picker [data-choose-folder]")
+    page.wait_for_selector("#picker [data-choose-folder]:not([disabled])")
+    assert tab_names(page) == ["repo"] and page.locator("#picker .banner.error").count() == 0
+    page.click("#picker [data-choose-folder]")
+    page.wait_for_selector("#tabs .tab.active:has-text('chosen')")
+    assert page.locator("#picker").is_hidden()

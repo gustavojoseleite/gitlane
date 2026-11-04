@@ -699,3 +699,35 @@ def test_hide_branch_endpoints(make_repo, tmp_path):
     assert "All branches are shown" in r.text and "is-hidden" not in r.text
     assert "secret work" in c.get("/partials/graph").text
     assert c.get("/actions/branch/hide").status_code == 405
+
+
+def test_choose_folder_endpoint(make_repo, tmp_path, monkeypatch):
+    from gitlane import folder_dialog
+    path, other = make_repo(), make_repo("other")
+    c = make_client(path)
+    c.get(f"/?token={TOKEN}")
+    monkeypatch.setattr(folder_dialog, "available", lambda: True)
+    assert "data-choose-folder" in c.get("/partials/picker").text
+    monkeypatch.setattr(folder_dialog, "available", lambda: False)
+    assert "data-choose-folder" not in c.get("/partials/picker").text
+
+    starts = []
+    def pick(result):
+        def choose(start=None):
+            starts.append(start)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        monkeypatch.setattr(folder_dialog, "choose_folder", choose)
+
+    pick(other)
+    data = c.post("/api/workspace/choose", data={"start": str(tmp_path)}).json()
+    assert data["tab"]["name"] == "other" and starts[-1] == str(tmp_path)
+    pick(None)
+    assert c.post("/api/workspace/choose").json() == {"cancelled": True}
+    pick(tmp_path)  # not a repo
+    r = c.post("/api/workspace/choose")
+    assert r.status_code == 400 and "Not a Git repository" in r.json()["error"]
+    pick(folder_dialog.DialogBusy("A folder window is already open."))
+    assert c.post("/api/workspace/choose").status_code == 409
+    assert c.get("/api/workspace/choose").status_code == 405

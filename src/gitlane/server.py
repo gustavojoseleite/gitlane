@@ -15,8 +15,9 @@ from urllib.parse import parse_qs, quote
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
-from . import __version__, blobs, branches, git_ops, graph, hidden, stash, tags, workspace
+from . import __version__, blobs, branches, folder_dialog, git_ops, graph, hidden, stash, tags, workspace
 from .git_ops import FileChange, FileDiff, GitError, NotAGitRepo, RepoStatus, get_status, open_repo
 from .workspace import Workspace
 
@@ -151,13 +152,29 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         ws.activate((await _form(request)).get("id", [""])[0])
         return JSONResponse(ws.as_dict())
 
+    @app.post("/api/workspace/choose")
+    async def api_choose(request: Request) -> JSONResponse:
+        """Show the system's "Choose folder" window (on this computer) and open the pick."""
+        start = (await _form(request)).get("start", [""])[0] or None
+        try:
+            chosen = await run_in_threadpool(folder_dialog.choose_folder, start)
+        except folder_dialog.DialogError as e:
+            return JSONResponse({"error": str(e)}, status_code=409 if isinstance(e, folder_dialog.DialogBusy) else 400)
+        if chosen is None:
+            return JSONResponse({"cancelled": True})
+        try:
+            tab = ws.open(chosen)
+        except NotAGitRepo as e:
+            return JSONResponse({"error": f"{e}. Pick the folder of a project that uses Git."}, status_code=400)
+        return JSONResponse({"tab": tab.as_dict(), **ws.as_dict()})
+
     @app.get("/partials/picker", response_class=HTMLResponse)
     def partial_picker(path: str | None = None) -> str:
         try:
             listing, error = workspace.browse(path), None
         except NotAGitRepo as e:
             listing, error = workspace.browse(None), str(e)
-        return render_picker(ws.recent_repos(), listing, error)
+        return render_picker(ws.recent_repos(), listing, error, can_choose=folder_dialog.available())
 
     @app.get("/api/status")
     def api_status() -> JSONResponse:
@@ -894,7 +911,7 @@ def _file_list(title: str, files: list[FileChange], kind: str) -> str:
     )
 
 
-def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
+def render_picker(recent: list[Path], listing, error: str | None = None, can_choose: bool = False) -> str:
     """The "+" tab: recent repos, a folder browser and a path field."""
     def open_btn(path: Path, label: str, css: str = "") -> str:
         return (f'<button type="button" class="{css}" data-open-path="{_attr(str(path))}" '
@@ -910,6 +927,12 @@ def render_picker(recent: list[Path], listing, error: str | None = None) -> str:
         f'placeholder="{_attr(str(Path.home() / "dev" / "project"))}">'
         '<button type="submit" class="primary">Open</button></form>'
     )
+    if can_choose:
+        parts.append(
+            '<div class="picker-choose"><button type="button" class="choose-btn" data-choose-folder '
+            f'data-start="{_attr(str(listing.path))}">{_icon("folder", 16)}<span>Choose folder…</span></button>'
+            '<span class="muted">Opens your system\'s folder window.</span></div>'
+        )
     if recent:
         repo_icon = _icon("repo")
         items = "".join(
