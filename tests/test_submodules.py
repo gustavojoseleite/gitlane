@@ -122,3 +122,71 @@ def test_set_up_after_clone(project, tmp_path):
             submodules.update(r, "nope")
     finally:
         r.close()
+
+
+# --- stash with submodules ---------------------------------------------------------------
+
+from gitlane import stash  # noqa: E402
+
+
+@pytest.fixture
+def dirty_sub(repo):
+    """vendor/lib has a tracked file; it is changed, and an untracked file is added."""
+    sub = sub_dir(repo)
+    (sub / "lib.txt").write_text("v1\n")
+    run(sub, "add", "lib.txt")
+    run(sub, "commit", "-q", "-m", "lib file")
+    run(Path(repo.working_tree_dir), "commit", "-q", "-am", "use lib file")
+    (sub / "lib.txt").write_text("v2\n")
+    (sub / "notes.txt").write_text("mine")
+    return sub
+
+
+def test_stash_with_only_submodule_changes_says_why(repo, dirty_sub):
+    with pytest.raises(GitError, match="only changes are inside vendor/lib"):
+        stash.save(repo)
+    assert stash.list_stashes(repo) == []
+    assert (dirty_sub / "lib.txt").read_text() == "v2\n"
+
+
+def test_stash_tells_what_stayed_in_the_submodule(repo, dirty_sub):
+    (Path(repo.working_tree_dir) / "top.txt").write_text("x")
+    msg = stash.save(repo)
+    assert "Changes inside vendor/lib were not stashed" in msg
+    assert "working tree is clean" not in msg
+    assert len(stash.list_stashes(repo)) == 1
+
+
+def test_stash_inside_submodule(repo, dirty_sub):
+    msg = stash.save_in_submodule(repo, "vendor/lib", "wip lib")
+    assert "Stashed the changes inside vendor/lib" in msg
+    assert (dirty_sub / "lib.txt").read_text() == "v1\n" and not (dirty_sub / "notes.txt").exists()
+    assert get_status(repo).clean
+    assert stash.list_stashes(repo) == []  # the project's own list is untouched
+    inner = open_repo(dirty_sub)
+    try:
+        [s] = stash.list_stashes(inner)
+        assert s.title == "wip lib"
+    finally:
+        inner.close()
+
+
+def test_stash_inside_submodule_can_keep_untracked(repo, dirty_sub):
+    stash.save_in_submodule(repo, "vendor/lib", "", include_untracked=False)
+    assert (dirty_sub / "lib.txt").read_text() == "v1\n"
+    assert (dirty_sub / "notes.txt").read_text() == "mine"
+
+
+def test_stash_inside_unknown_or_missing_submodule(repo, project, tmp_path):
+    with pytest.raises(GitError, match="not found"):
+        stash.save_in_submodule(repo, "nope")
+    with pytest.raises(GitError):
+        stash.save_in_submodule(repo, "../outside")
+    clone = tmp_path / "clone"
+    run(tmp_path, "clone", "-q", str(project), str(clone))  # submodule not set up
+    r = open_repo(clone)
+    try:
+        with pytest.raises(GitError, match="not set up"):
+            stash.save_in_submodule(r, "vendor/lib")
+    finally:
+        r.close()

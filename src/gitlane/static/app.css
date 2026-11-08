@@ -88,11 +88,21 @@ button.primary { background: var(--accent); color: var(--accent-fg); border-colo
 button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
 button.danger { color: var(--red); }
 button.danger:hover { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
-.tb-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; }
-.tb-btn .icon { color: var(--muted); }
-.tb-btn.primary .icon { color: inherit; }
-.tb-btn:hover .icon { color: var(--fg); }
-.tb-btn.primary:hover .icon { color: inherit; }
+/* Toolbar actions (Fetch / Pull / Push / New branch / Stash): tinted with the accent so they
+   stand out from the plain buttons in the panels; the one with something to do turns solid. */
+.tb-btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 13px;
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--bg));
+}
+.tb-btn:hover { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+.tb-btn .icon { color: inherit; }
+.tb-btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.tb-btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.tb-btn.danger { color: var(--red); background: color-mix(in srgb, var(--red) 9%, var(--bg));
+  border-color: color-mix(in srgb, var(--red) 40%, var(--bg)); }
+.tb-btn.danger:hover { background: color-mix(in srgb, var(--red) 16%, var(--bg)); }
 .badge {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
   font-size: 11px; font-weight: 650; background: var(--accent); color: var(--accent-fg);
@@ -672,6 +682,9 @@ table.diff tr.meta td { color: var(--muted); font-style: italic; }
 .modal .modal-error { color: var(--red); font-size: 12px; }
 .modal-extra { display: flex; flex-direction: column; gap: 4px; margin-left: 46px; font-size: 12px; color: var(--fg-2); }
 .modal-extra[hidden] { display: none; }
+.modal-check { display: flex; align-items: center; gap: 8px; margin-left: 46px; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
+.modal-check[hidden] { display: none; }
+.modal .modal-check input { width: auto; flex: none; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); }
 .modal-extra textarea {
   font: 13px var(--font); color: var(--fg); background: var(--bg); resize: vertical;
   border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px;
@@ -726,3 +739,8 @@ button.danger-solid:hover { background: color-mix(in srgb, var(--red) 85%, #000)
 .author-card a, .about a:not(.link-btn) { color: var(--accent); text-decoration: none; }
 .author-card a:hover { text-decoration: underline; }
 .author-card .avatar { background: linear-gradient(135deg, var(--c0), var(--c4)); }
+
+/* Refresh is a helper, not an action on the repo: keep it plain so the actions stand out. */
+#refresh.tb-btn { color: var(--fg-2); background: var(--bg); border-color: var(--border-strong); font-weight: 500; }
+#refresh.tb-btn:hover { background: var(--hover); }
+#refresh.tb-btn .icon { color: var(--muted); }

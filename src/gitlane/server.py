@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import threading
 from contextvars import ContextVar
 from dataclasses import asdict
 from html import escape
@@ -113,16 +114,40 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
         headers = {"HX-Trigger-After-Swap": ", ".join(events)} if events else {}
         return HTMLResponse(html, headers=headers)
 
+    # One action at a time per repository: a second click while a pull is still
+    # running gets an answer right away instead of a second Git fighting over index.lock.
+    action_locks: dict[str, threading.Lock] = {}
+    action_locks_guard = threading.Lock()
+
+    def action_lock() -> threading.Lock:
+        path = ws.path_of(_current_repo.get())
+        if path is None:
+            raise NoRepo()
+        with action_locks_guard:
+            return action_locks.setdefault(str(path), threading.Lock())
+
+    def _run_action_sync(fn, args, notice, extra_events) -> HTMLResponse:
+        lock = action_lock()
+        if not lock.acquire(blocking=False):
+            return status_response(error="Another action is still running in this repository.",
+                                   hint="Wait for it to finish, then try again.")
+        try:
+            try:
+                result = with_repo(fn, *args)
+            except (GitError, NotAGitRepo) as e:
+                return status_response(error=str(e), hint=getattr(e, "hint", None),
+                                       action=getattr(e, "action", None), events=("gitlane:changed",))
+            if callable(notice):
+                notice = notice(result)
+            return status_response(notice=notice, events=("gitlane:changed", *extra_events))
+        finally:
+            lock.release()
+
     async def run_action(fn, *args, notice: str | None = None,
                          extra_events: tuple[str, ...] = ()) -> HTMLResponse:
-        try:
-            result = with_repo(fn, *args)
-        except (GitError, NotAGitRepo) as e:
-            return status_response(error=str(e), hint=getattr(e, "hint", None),
-                                   action=getattr(e, "action", None), events=("gitlane:changed",))
-        if callable(notice):
-            notice = notice(result)
-        return status_response(notice=notice, events=("gitlane:changed", *extra_events))
+        # Git runs on a worker thread, so a slow pull never stops the server from
+        # answering the page (status, graph, other tabs) in the meantime.
+        return await run_in_threadpool(_run_action_sync, fn, args, notice, extra_events)
 
     # --- pages & reads -----------------------------------------------------
 
@@ -224,7 +249,7 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
     async def action_discard(request: Request) -> HTMLResponse:
         paths = await _paths(request)
         if len(paths) != 1:
-            return status_response(error="Discard works on one file at a time.")
+            return await run_in_threadpool(status_response, error="Discard works on one file at a time.")
         return await run_action(git_ops.discard, paths[0],
                                 notice=f"Discarded changes to {paths[0]}.")
 
@@ -433,7 +458,15 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 
     @app.post("/actions/stash/save", response_class=HTMLResponse)
     async def action_stash_save(request: Request) -> HTMLResponse:
-        return await run_action(stash.save, await field(request, "message"), notice=lambda m: m)
+        form = await _form(request)
+        return await run_action(stash.save, form.get("message", [""])[0], _untracked(form),
+                                notice=lambda m: m)
+
+    @app.post("/actions/submodule/stash", response_class=HTMLResponse)
+    async def action_submodule_stash(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(stash.save_in_submodule, form.get("path", [""])[0],
+                                form.get("message", [""])[0], _untracked(form), notice=lambda m: m)
 
     def stash_action(fn):
         async def handler(request: Request) -> HTMLResponse:
@@ -468,6 +501,11 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
+
+
+def _untracked(form: dict[str, list[str]]) -> bool:
+    """The "Include untracked files" box; on unless it was unticked."""
+    return form.get("untracked", ["1"])[0] != "0"
 
 
 async def _form(request: Request) -> dict[str, list[str]]:
@@ -797,16 +835,29 @@ def delete_remote_question(name: str) -> str:
 
 
 def _prompt_button(url: str, field: str, label: str, question: str, css: str = "small",
-                   icon: str | None = None, ok: str | None = None) -> str:
+                   icon: str | None = None, ok: str | None = None, vals: dict | None = None,
+                   check: tuple[str, str] | None = None) -> str:
     """A button that asks a question, then POSTs the answer as a form field.
 
     (htmx's hx-prompt sends the answer URL-encoded in a header, which mangles
     names like "feature/x"; the page script sends it in the body instead.)
+
+    ``vals`` are sent along; ``check`` = (form field, label) adds a checkbox (ticked
+    at first) whose state is sent as "1" or "0". With css "icon-btn" only the icon
+    shows and the label becomes the tooltip.
     """
-    inner = f'{_icon(icon, 15)}<span>{escape(label)}</span>' if icon else escape(label)
-    ok_attr = f' data-prompt-ok="{_attr(ok)}"' if ok else ""
+    extra = f' data-prompt-ok="{_attr(ok)}"' if ok else ""
+    if "icon-btn" in css.split():
+        inner = _icon(icon)
+        extra += f' title="{_attr(label)}" aria-label="{_attr(label)}"'
+    else:
+        inner = f'{_icon(icon, 15)}<span>{escape(label)}</span>' if icon else escape(label)
+    if vals:
+        extra += f' data-prompt-vals="{_attr(json.dumps(vals))}"'
+    if check:
+        extra += f' data-prompt-check-field="{_attr(check[0])}" data-prompt-check="{_attr(check[1])}"'
     return (f'<button type="button" class="{css}" data-prompt-url="{_attr(url)}" '
-            f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}"{ok_attr}>{inner}</button>')
+            f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}"{extra}>{inner}</button>')
 
 
 def _error_banner(error: str, hint: str | None, action: dict | None = None) -> str:
@@ -839,7 +890,7 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
         btn("/actions/fetch", "Fetch", "Download new commits from all remotes without changing your files",
             "fetch"),
         btn("/actions/pull", "Pull", "Fetch and bring the upstream's new commits into this branch", "pull",
-            count=s.behind),
+            css="primary" if s.behind else "", count=s.behind),
         btn("/actions/push", "Push", "Upload this branch's commits to the remote", "push",
             css="primary" if s.ahead and not s.behind else "", count=s.ahead),
         "</div>",
@@ -861,10 +912,11 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
                                     "switches to it. Name:",
                                     css="tb-btn", icon="branch", ok="Create branch"))
     if can_stash:
-        tools.append(_prompt_button("/actions/stash/save", "message", "Stash changes",
-                                    "Stash your changes\n\nAll changes, including untracked files, are "
-                                    "put aside and your working tree becomes clean. Message (optional):",
-                                    css="tb-btn", icon="stash", ok="Stash"))
+        question = ("Stash your changes\n\nYour changes are put aside until you apply the stash. "
+                    "Changes inside submodules are stashed separately. Message (optional):")
+        tools.append(_prompt_button("/actions/stash/save", "message", "Stash changes", question,
+                                    css="tb-btn", icon="stash", ok="Stash",
+                                    check=("untracked", "Include untracked files") if s.untracked else None))
     sep = '<span class="tb-sep" aria-hidden="true"></span>' if tools else ""
     return (f'<div class="sync-bar">{"".join(buttons)}{sep}{"".join(tools)}'
             '<span class="spinner" aria-hidden="true"></span></div>')
@@ -901,6 +953,14 @@ def _submodule_actions(f: FileChange, root: str) -> str:
                                  "Its newer commits are not deleted; they stay in the submodule's own history.",
                          label="Back to the recorded commit", css="danger", icon="undo")
         actions += _post("/actions/stage", {"path": f.path}, label="Stage (record its new commit)", icon="plus")
+    note = f.submodule or ""
+    if "files inside" in note:
+        actions += _prompt_button(
+            "/actions/submodule/stash", "message", "Stash changes inside",
+            f"Stash the changes inside {f.path}\n\nThey go to {f.path}'s own stash list; open it in "
+            "its own tab to see or apply them. Message (optional):",
+            css="icon-btn", icon="stash", ok="Stash", vals={"path": f.path},
+            check=("untracked", "Include untracked files") if "untracked files inside" in note else None)
     return actions + _open_repo_button(full, f"Open {f.path} in a new tab")
 
 

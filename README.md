@@ -18,7 +18,7 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 - **Submodules** — see which are out of date or not set up, what changed (commits added or removed), set them up or move them back, and open one in its own tab
 - **Hide branches** — keep the graph focused: hide a branch (or all remote branches) and show it again any time
 - **Tags** — create (lightweight or with a message), push, delete here or on the remote
-- **Stash** — save (including untracked files), apply, pop, drop, and look inside a stash
+- **Stash** — save (with or without untracked files), apply, pop, drop, look inside a stash, and stash the changes inside a submodule
 - **Merge conflicts** — see the conflicted files, then *abort* or *mark resolved and commit*
 - **Tabs** — several repositories at once; open more with your system's *Choose folder* window, recent repos or the built-in folder browser
 - **Safe by default** — dangerous actions ask first; runs only on your computer (see [Security](#security))

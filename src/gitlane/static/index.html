@@ -184,6 +184,8 @@ SOFTWARE.</pre>
       <input id="modal-input" type="text" autocomplete="off" spellcheck="false" hidden>
       <label id="modal-extra" class="modal-extra" hidden><span id="modal-extra-label"></span>
         <textarea id="modal-extra-input" rows="3" spellcheck="true"></textarea></label>
+      <label id="modal-check" class="modal-check" hidden><input id="modal-check-input" type="checkbox">
+        <span id="modal-check-label"></span></label>
       <p id="modal-error" class="modal-error" role="alert" hidden></p>
       <div class="modal-actions">
         <button type="submit" value="ok" id="modal-ok" class="primary">OK</button>
@@ -255,6 +257,11 @@ SOFTWARE.</pre>
       const toolbarRow = document.getElementById("toolbar-row");
       const statusEl = document.getElementById("status");
 
+      // Never wait forever: a request with no answer after 30 s gives up, the
+      // buttons come back and a message says what happened (see the handlers below).
+      const REQUEST_TIMEOUT_MS = 30000;
+      htmx.config.timeout = REQUEST_TIMEOUT_MS;
+
       document.body.addEventListener("htmx:configRequest", (e) => {
         if (activeRepo) e.detail.headers["X-Gitlane-Repo"] = activeRepo;
       });
@@ -264,10 +271,21 @@ SOFTWARE.</pre>
         if (sent && sent !== activeRepo) e.detail.shouldSwap = false;
       });
 
-      const api = async (url, body) => {
+      const NO_ANSWER = "gitlane didn't answer in 30 seconds. The action may still be finishing; " +
+                        "press r to refresh in a moment.";
+      const UNREACHABLE = "Can't reach gitlane. If it stopped or was restarted, " +
+                          "open the new link from your terminal.";
+
+      // timeoutMs = null: wait as long as it takes (the system's folder window waits for you).
+      const api = async (url, body, timeoutMs = REQUEST_TIMEOUT_MS) => {
         const opts = { headers: activeRepo ? { "X-Gitlane-Repo": activeRepo } : {} };
         if (body) { opts.method = "POST"; opts.body = new URLSearchParams(body); }
-        const r = await fetch(url, opts);
+        let r;
+        try {
+          r = await fetch(url, timeoutMs ? { ...opts, signal: AbortSignal.timeout(timeoutMs) } : opts);
+        } catch (err) {
+          return { error: err.name === "TimeoutError" ? NO_ANSWER : UNREACHABLE };
+        }
         const data = await r.json().catch(() => ({}));
         if (!r.ok && !data.error) data.error = `Request failed (HTTP ${r.status}).`;
         return data;
@@ -282,7 +300,8 @@ SOFTWARE.</pre>
         const repo = activeRepo;
         if (!repo) return;
         try {
-          const r = await fetch("/api/refs-version", { headers: { "X-Gitlane-Repo": repo } });
+          const r = await fetch("/api/refs-version", { headers: { "X-Gitlane-Repo": repo },
+                                                       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
           if (!r.ok || repo !== activeRepo) return;
           const { version } = await r.json();
           if (repo !== activeRepo) return;
@@ -439,7 +458,7 @@ SOFTWARE.</pre>
         label.textContent = "Waiting for the folder window…";
         pickerError(null);
         try {
-          const data = await api("/api/workspace/choose", { start: b.dataset.start || "" });
+          const data = await api("/api/workspace/choose", { start: b.dataset.start || "" }, null);
           if (!data.cancelled) opened(data);
         } finally {
           b.disabled = false;
@@ -570,6 +589,9 @@ SOFTWARE.</pre>
       const modalExtra = document.getElementById("modal-extra");
       const modalExtraLabel = document.getElementById("modal-extra-label");
       const modalExtraInput = document.getElementById("modal-extra-input");
+      const modalCheck = document.getElementById("modal-check");
+      const modalCheckLabel = document.getElementById("modal-check-label");
+      const modalCheckInput = document.getElementById("modal-check-input");
       const modalOk = document.getElementById("modal-ok");
       const modalCancel = document.getElementById("modal-cancel");
 
@@ -581,10 +603,12 @@ SOFTWARE.</pre>
         return label === "HARD reset" ? "Reset" : label;
       };
 
-      // ask({question, danger, input, value, required, ok, extra}) -> Promise: true/false, or the
-      // text/null. With extra (a label), a second, multi-line field is shown and the answer is
-      // [text, extraText] or null.
-      const ask = ({ question, danger = false, input = false, value = "", required = false, ok, extra }) =>
+      // ask({question, danger, input, value, required, ok, extra, check}) -> Promise: true/false, or
+      // the text/null. With extra (a label), a second, multi-line field is shown and the answer is
+      // [text, extraText] or null. With check (a label), a ticked checkbox is shown; read its state
+      // from modalCheckInput.checked after the answer.
+      const ask = ({ question, danger = false, input = false, value = "", required = false, ok, extra,
+                     check }) =>
         new Promise((resolve) => {
           const [title, ...rest] = question.split(/\n\s*\n/);
           modalTitle.textContent = title.trim();
@@ -598,6 +622,9 @@ SOFTWARE.</pre>
           modalExtra.hidden = !extra;
           modalExtraLabel.textContent = extra || "";
           modalExtraInput.value = "";
+          modalCheck.hidden = !check;
+          modalCheckLabel.textContent = check || "";
+          modalCheckInput.checked = true;
           modalError.hidden = true;
           modal.returnValue = "";
           const done = () => {
@@ -652,9 +679,14 @@ SOFTWARE.</pre>
         const b = e.target.closest("[data-prompt-url]");
         if (!b) return;
         const required = b.dataset.promptField === "name";
+        const checkField = b.dataset.promptCheckField;
         ask({ question: b.dataset.prompt, input: true, value: b.dataset.promptDefault || "", required,
-              ok: b.dataset.promptOk || b.textContent.trim() }).then((answer) => {
-          if (answer !== null) post(b.dataset.promptUrl, { [b.dataset.promptField]: answer });
+              ok: b.dataset.promptOk || b.textContent.trim(),
+              check: checkField ? b.dataset.promptCheck : undefined }).then((answer) => {
+          if (answer === null) return;
+          const values = { ...JSON.parse(b.dataset.promptVals || "{}"), [b.dataset.promptField]: answer };
+          if (checkField) values[checkField] = modalCheckInput.checked ? "1" : "0";
+          post(b.dataset.promptUrl, values);
         });
       });
 
@@ -981,6 +1013,19 @@ SOFTWARE.</pre>
         if (data.active) activate(data.active, false);
         else showPicker();
       })();
+      // No answer (timeout) or no server at all: say so on top of what is shown,
+      // without wiping it; the next successful load replaces the message.
+      const showRequestProblem = (e, text) => {
+        const target = e.detail.target || statusEl;
+        target.querySelector(":scope > .request-problem")?.remove();
+        const div = document.createElement("div");
+        div.className = "banner error request-problem";
+        div.setAttribute("role", "alert");
+        div.textContent = text;
+        target.prepend(div);
+      };
+      document.body.addEventListener("htmx:timeout", (e) => showRequestProblem(e, NO_ANSWER));
+      document.body.addEventListener("htmx:sendError", (e) => showRequestProblem(e, UNREACHABLE));
       document.body.addEventListener("htmx:responseError", (e) => {
         e.detail.target.innerHTML =
           '<p class="error">Request failed (HTTP ' + e.detail.xhr.status +

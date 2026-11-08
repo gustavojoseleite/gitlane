@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 import git
 
-from .git_ops import FileChange, FileDiff, GitError, _run, check_paths, get_status, parse_diff
+from .git_ops import FileChange, FileDiff, GitError, RepoStatus, _run, check_paths, get_status, parse_diff
 from .graph import EMPTY_TREE, _parse_name_status
 
 _F = "\x1f"
@@ -77,24 +78,85 @@ def _find(repo: git.Repo, index, sha: str) -> Stash:
     return stashes[index]
 
 
-def save(repo: git.Repo, message: str = "", include_untracked: bool = True) -> str:
-    """Stash all uncommitted changes (and, by default, untracked files)."""
+def _top_stash(repo: git.Repo) -> str | None:
+    code, out, _ = repo.git.rev_parse("-q", "--verify", "refs/stash",
+                                      with_extended_output=True, with_exceptions=False)
+    return out.strip() if code == 0 else None
+
+
+def _push(repo: git.Repo, message: str, include_untracked: bool) -> RepoStatus:
+    """Run ``git stash push``; returns the status from before.
+
+    Git never stashes what happens inside a submodule (its files or its new
+    commits), and it exits with success when it found nothing to save -- so
+    check first, and check afterwards that a stash really was made.
+    """
     status = get_status(repo)
     if status.head_commit is None:
         raise GitError("Make a first commit before stashing.")
     if status.conflicted:
         raise GitError("Resolve the conflicted files before stashing.")
-    nothing = not (status.staged or status.unstaged or (include_untracked and status.untracked))
-    if nothing:
+    files = [c for c in status.unstaged if not c.submodule]
+    if not (status.staged or files or (include_untracked and status.untracked)):
+        subs = [c.path for c in status.unstaged if c.submodule]
+        if subs:
+            raise GitError(f"The only changes are inside {_names(subs)}, which Git doesn't stash "
+                           "from here. Use “Stash changes inside” on the submodule instead.")
+        if status.untracked:
+            raise GitError("There are no changes to stash. Untracked files are kept unless you tick "
+                           "“Include untracked files”.")
         raise GitError("There are no changes to stash.")
     args = ["push", "-q"]
     if include_untracked:
         args.append("--include-untracked")
-    message = (message or "").strip()
     if message:
         args += ["-m", message]
+    before = _top_stash(repo)
     _run(repo.git.stash, *args, **_STASH_ENV)
-    return f"Stashed your changes{f' as “{message}”' if message else ''}. Your working tree is clean."
+    if _top_stash(repo) == before:
+        raise GitError("Git found nothing to stash.")
+    return status
+
+
+def _names(paths: list[str]) -> str:
+    return paths[0] if len(paths) == 1 else ", ".join(paths[:-1]) + f" and {paths[-1]}"
+
+
+def save(repo: git.Repo, message: str = "", include_untracked: bool = True) -> str:
+    """Stash all uncommitted changes (and, by default, untracked files)."""
+    message = (message or "").strip()
+    _push(repo, message, include_untracked)
+    text = f"Stashed your changes{f' as “{message}”' if message else ''}."
+    after = get_status(repo)
+    left = [c.path for c in after.unstaged if c.submodule]
+    if left:
+        text += (f" Changes inside {_names(left)} were not stashed: Git stashes each submodule "
+                 "separately (use “Stash changes inside” on it).")
+    elif after.untracked and not include_untracked:
+        text += " Untracked files were kept."
+    elif after.clean:
+        text += " Your working tree is clean."
+    return text
+
+
+def save_in_submodule(repo: git.Repo, path: str, message: str = "", include_untracked: bool = True) -> str:
+    """Stash the changes inside a submodule (its own stash list holds them)."""
+    from .git_ops import open_repo
+    from .submodules import _require
+
+    sub = _require(repo, path)
+    if not sub.ready:
+        raise GitError(f"{sub.path} is not set up, so there is nothing to stash in it.")
+    message = (message or "").strip()
+    inner = open_repo(Path(repo.working_tree_dir) / sub.path)
+    try:
+        if Path(inner.working_tree_dir).resolve() != (Path(repo.working_tree_dir) / sub.path).resolve():
+            raise GitError(f"{sub.path} is not checked out.")
+        _push(inner, message, include_untracked)
+    finally:
+        inner.close()
+    return (f"Stashed the changes inside {sub.path}{f' as “{message}”' if message else ''}. "
+            f"Open {sub.path} in its own tab to see or apply the stash.")
 
 
 def apply(repo: git.Repo, index, sha: str) -> str:

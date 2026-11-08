@@ -29,9 +29,12 @@ def open_repo(path: str | Path) -> git.Repo:
     # a file called "*" must not mean "all files".
     # Never let Git wait for a password on a terminal nobody is watching.
     # ...and never open an editor (merge/revert/cherry-pick would wait forever).
+    # Reads (status) run while an action may be working, so they must not take
+    # index.lock just to refresh the index: that could make a pull or commit fail.
     repo.git.update_environment(
         GIT_LITERAL_PATHSPECS="1", GIT_TERMINAL_PROMPT="0",
         GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true", GIT_MERGE_AUTOEDIT="no",
+        GIT_OPTIONAL_LOCKS="0",
     )
     return repo
 

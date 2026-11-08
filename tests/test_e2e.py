@@ -549,6 +549,30 @@ def test_slow_answer_for_old_tab_neither_blocks_nor_lands(make_repo, open_page):
 
 
 
+def test_request_without_answer_gives_up(make_repo, open_page):
+    """A pull that never answers must not leave the page stuck (buttons disabled forever)."""
+    page = open_page(make_repo())
+    page.evaluate("htmx.config.timeout = 500")
+    held = []
+    page.route("**/actions/pull", lambda route: held.append(route))
+    page.click(".sync-bar button[hx-post='/actions/pull']")
+    problem = page.wait_for_selector("#status .request-problem")
+    assert "didn't answer in 30 seconds" in problem.inner_text()
+    page.wait_for_function("![...document.querySelectorAll('.sync-bar button')].some(b => b.disabled)")
+    assert page.locator("#toolbar .branch").count() == 1  # the panel was kept, not wiped
+    page.unroute("**/actions/pull")
+    page.click("#refresh")  # the next real answer replaces the message
+    page.wait_for_selector("#status .request-problem", state="detached")
+
+
+def test_server_unreachable_is_reported(make_repo, open_page):
+    page = open_page(make_repo())
+    page.route("**/actions/fetch", lambda route: route.abort())
+    page.click(".sync-bar button[hx-post='/actions/fetch']")
+    assert "Can't reach gitlane" in page.wait_for_selector("#status .request-problem").inner_text()
+    page.wait_for_function("![...document.querySelectorAll('.sync-bar button')].some(b => b.disabled)")
+
+
 # --- dialog & page size ---------------------------------------------------------
 
 def test_dialog_keyboard_and_required_name(make_repo, open_page):
@@ -819,6 +843,47 @@ def test_open_submodule_in_new_tab(tmp_path, open_page):
     page.wait_for_selector("#tabs .tab.active:has-text('lib')")
     page.wait_for_selector("#graph .row:has-text('lib first')")
     assert tab_names(page) == ["app", "lib"]
+
+
+def test_stash_keeps_untracked_when_unticked(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("work in progress\n")
+    (path / "novo.txt").write_text("untracked")
+    page = open_page(path)
+    page.click("#toolbar button:has-text('Stash changes')")
+    page.wait_for_selector("#modal[open] #modal-check:not([hidden])")
+    assert page.is_checked("#modal-check-input")
+    page.uncheck("#modal-check-input")
+    answer_modal(page, "só o readme")
+    assert "Untracked files were kept" in notice(page)
+    assert (path / "novo.txt").exists() and (path / "README.md").read_text() == "hello\n"
+    # A prompt without the box (New branch) doesn't show it.
+    page.click("#toolbar button:has-text('New branch')")
+    page.wait_for_selector("#modal[open]")
+    assert page.locator("#modal-check").is_hidden()
+    answer_modal(page, accept=False)
+
+
+def test_stash_inside_submodule_from_changes(tmp_path, open_page):
+    run(tmp_path, "config", "--global", "protocol.file.allow", "always")
+    lib, app = tmp_path / "lib", tmp_path / "app"
+    for d in (lib, app):
+        d.mkdir()
+        run(d, "init", "-q")
+    (lib / "lib.txt").write_text("v1\n")
+    run(lib, "add", "lib.txt")
+    run(lib, "commit", "-q", "-m", "lib")
+    run(app, "commit", "-q", "--allow-empty", "-m", "init")
+    run(app, "submodule", "add", "-q", str(lib), "vendor/lib")
+    run(app, "commit", "-q", "-m", "add lib")
+    (app / "vendor/lib/lib.txt").write_text("v2\n")
+    page = open_page(app)
+    page.locator("#changes li", has_text="vendor/lib").first.hover()
+    page.click("#changes button[aria-label='Stash changes inside']")
+    answer_modal(page, "lib wip")
+    assert "Stashed the changes inside vendor/lib" in notice(page)
+    assert (app / "vendor/lib/lib.txt").read_text() == "v1\n"
+    page.wait_for_selector("#changes .clean")
 
 
 def test_diff_opens_over_the_graph(make_repo, open_page):

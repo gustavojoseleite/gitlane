@@ -757,3 +757,81 @@ def test_submodule_in_sidebar_and_diff(tmp_path):
     assert "Submodule" in diff and "lib &lt;2&gt;" in diff and "Open lib in a new tab" in diff
     r = c.post("/actions/submodule/update", data={"path": "lib"})
     assert "lib is on the commit this project records." in r.text and "on another commit" not in r.text
+
+
+# --- slow actions --------------------------------------------------------------
+
+def test_slow_action_does_not_block_the_server(client, monkeypatch):
+    """A stuck pull must not freeze the page: reads still answer, and a second
+    action in the same repo is refused right away instead of waiting."""
+    import threading
+
+    from gitlane import git_ops
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_fetch(repo):
+        started.set()
+        assert release.wait(10), "test never released the slow action"
+        return "Fetched."
+
+    monkeypatch.setattr(git_ops, "fetch", slow_fetch)
+    with client:  # one event loop shared by both threads, like the real server
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault("r", client.post("/actions/fetch")))
+        worker.start()
+        try:
+            assert started.wait(10)
+            status = client.get("/partials/status")
+            assert status.status_code == 200
+            busy = client.post("/actions/fetch")
+            assert busy.status_code == 200
+            assert "Another action is still running" in busy.text
+        finally:
+            release.set()
+            worker.join(10)
+        assert "Fetched." in result["r"].text
+        # Once the slow one finished, actions work again.
+        assert "Another action" not in client.post("/actions/stage-all").text
+
+
+def test_stash_untracked_box_through_server(client, repo_path):
+    (repo_path / "novo.txt").write_text("untracked")
+    html = client.get("/partials/status").text
+    assert 'data-prompt-check-field="untracked"' in html and "Include untracked files" in html
+    r = client.post("/actions/stash/save", data={"message": "", "untracked": "0"})
+    assert "Untracked files were kept" in r.text
+    assert (repo_path / "novo.txt").exists() and (repo_path / "README.md").read_text() == "hello\n"
+    # Nothing but untracked files left: no box to tick, it's the only thing to stash.
+    assert "Stash changes" in r.text
+
+
+def test_submodule_stash_through_server(tmp_path):
+    from .conftest import run
+    run(tmp_path, "config", "--global", "protocol.file.allow", "always")
+    lib, app = tmp_path / "lib", tmp_path / "app"
+    for d in (lib, app):
+        d.mkdir()
+        run(d, "init", "-q")
+    (lib / "lib.txt").write_text("v1\n")
+    run(lib, "add", "lib.txt")
+    run(lib, "commit", "-q", "-m", "lib")
+    run(app, "commit", "-q", "--allow-empty", "-m", "init")
+    run(app, "submodule", "add", "-q", str(lib), "vendor/lib")
+    run(app, "commit", "-q", "-m", "add lib")
+    (app / "vendor/lib/lib.txt").write_text("v2\n")
+    c = make_client(app)
+    c.get(f"/?token={TOKEN}")
+    html = c.get("/partials/status").text
+    assert 'data-prompt-url="/actions/submodule/stash"' in html
+    assert "&quot;path&quot;: &quot;vendor/lib&quot;" in html
+    r = c.post("/actions/submodule/stash", data={"path": "vendor/lib", "message": "wip"})
+    assert "Stashed the changes inside vendor/lib" in r.text
+    assert (app / "vendor/lib/lib.txt").read_text() == "v1\n"
+    assert "Working tree clean" in r.text
+    assert c.post("/actions/submodule/stash", data={"path": "../x"}).status_code == 200
+    assert anon_post_forbidden(app, "/actions/submodule/stash")
+
+
+def anon_post_forbidden(path, url) -> bool:
+    return make_client(path).post(url, data={"path": "vendor/lib"}).status_code == 403

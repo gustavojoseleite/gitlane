@@ -193,3 +193,23 @@ def test_diff_rejects_bad_path(repo):
     [s] = stash.list_stashes(repo)
     with pytest.raises(GitError):
         stash.file_diff(repo, s.index, s.sha, "../etc/passwd")
+
+
+# --- untracked files option ------------------------------------------------------------
+
+def test_save_can_keep_untracked_files(repo):
+    make_changes(repo)
+    msg = stash.save(repo, "", include_untracked=False)
+    assert "Untracked files were kept" in msg
+    status = get_status(repo)
+    assert not status.unstaged and [c.path for c in status.untracked] == ["new.txt"]
+    assert (root(repo) / "new.txt").read_text() == "untracked"
+    [s] = stash.list_stashes(repo)
+    assert [f.path for f in stash.detail(repo, 0, s.sha).files] == ["README.md"]
+
+
+def test_only_untracked_files_and_box_unticked(repo):
+    (root(repo) / "new.txt").write_text("untracked")
+    with pytest.raises(GitError, match="Include untracked files"):
+        stash.save(repo, "", include_untracked=False)
+    assert stash.list_stashes(repo) == []

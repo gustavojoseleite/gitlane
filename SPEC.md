@@ -64,13 +64,14 @@ Remote operations (push/pull/fetch) must use the user's existing Git setup (SSH 
   - Right-click a commit → checkout, create branch here, cherry-pick, revert, reset (soft/mixed/hard, hard confirms)
   - Right-click a branch label → checkout, merge into current, delete (confirm)
 - **Branches:** create, switch, merge, delete
-- **Stash:** save (with optional message), list, apply, pop, drop (confirm)
+- **Stash:** save (with optional message; *Include untracked files* checkbox, ticked by default), list, apply, pop, drop (confirm). Git never stashes changes inside a submodule from the project, so a submodule with changed files gets *Stash changes inside* (`git stash push` in the submodule, kept in its own stash list); a stash that would save nothing says why instead of claiming success
 - **Submodules (v0.2):** status from porcelain v2's sub field, diffs with `--submodule=log`, a sidebar list from `git submodule status`; actions: `git submodule update --init --recursive` (set up / back to the recorded commit, confirm when it moves a checked-out submodule) and *open in a tab*; discard on a submodule only moves its commit and never touches files inside it
 - **Choose folder window (v0.2):** the picker's *Choose folder…* asks the local server to show the system dialog (zenity/kdialog on Linux with a display, osascript on macOS, PowerShell on Windows; no shell, the start folder passed as an argument/env var); hidden when none is available
 - **Hide branches (v0.2):** hide a branch (local with its upstream, or remote) or all remote branches from the graph via `git log --exclude`; stored per repo in gitlane's state file (Git is not changed); the current branch is always shown
 - **Tags (v0.2):** create at a commit (lightweight, or annotated with a message), list in the sidebar, push one tag, delete locally (confirm), delete on the remote (confirm)
 - **Merge conflicts (simple):** when a merge stops with conflicts, show the conflicted files and offer **"Abort merge"** or **"I resolved it in my editor → mark resolved and commit"**
 - **Refresh:** UI refreshes after every action, when the browser tab regains focus, and via a Refresh button
+- **Never stuck:** actions run on a worker thread so the server keeps answering while Git works; one action at a time per repo (a second one is refused right away); reads use `GIT_OPTIONAL_LOCKS=0` so they never take `index.lock` from a running action. The page gives up on a request after 30 s (network commands are killed by the server after 120 s) and reports no answer / server unreachable without wiping the panel
 
 ### Later (v2+) — out of v1
 
