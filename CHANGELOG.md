@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 — 2026-11-08
+
+- **No more stuck page:** a slow pull, push or other action no longer freezes gitlane; the rest of
+  the page keeps working while Git runs. A request with no answer after 30 seconds gives up with a
+  message (the buttons come back), and a stopped server is reported as such. A second action in the
+  same repository while one is still running is refused with a clear message
+- **Stash: Include untracked files** is now a checkbox (ticked by default), so you can stash your
+  edits and keep new files where they are
+- **Stash inside a submodule:** a changed submodule in the Changes list has a *Stash changes inside*
+  button; the stash goes to the submodule's own stash list
+- **Toolbar actions stand out:** Fetch, Pull, Push, New branch and Stash are larger and tinted;
+  Pull turns solid when there are commits to bring in (Push when there are commits to upload)
+- Stashing no longer says “Stashed your changes” when the only changes are inside submodules (Git
+  never stashes those from the project), and says which submodules still have changes
+
 ## 0.3.0 — 2026-11-04
 
 - **New layout:** submodules, branches and tags on the left (submodules first, highlighted when one
