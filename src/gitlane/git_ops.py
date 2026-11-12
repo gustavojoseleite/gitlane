@@ -572,13 +572,55 @@ def pull(repo: git.Repo) -> str:
                        "Push it first to create it on the remote.")
     configured = _config(repo, "pull.rebase") is not None or _config(repo, "pull.ff") is not None
     args = [] if configured else ["--no-rebase"]
+    from .submodules import list_submodules  # submodules imports this module
+
+    subs_before = {s.path: s.state for s in list_submodules(repo)}
     before = _head_sha(repo)
     _run(repo.git.pull, *args, **_network_kwargs(repo))
     after = _head_sha(repo)
     if before == after:
         return f"Already up to date with {upstream}."
     count = int(repo.git.rev_list("--count", f"{before}..{after}")) if before else 0
-    return f"Pulled {count} new commit{'s' if count != 1 else ''} from {upstream}."
+    text = f"Pulled {count} new commit{'s' if count != 1 else ''} from {upstream}."
+    if not subs_before and not (Path(repo.working_tree_dir) / ".gitmodules").exists():
+        return text
+    changed = set(repo.git.diff("--name-only", "-z", "--no-ext-diff", before, after).split("\0")) if before else set()
+    return text + _update_pulled_submodules(repo, subs_before, changed)
+
+
+def _update_pulled_submodules(repo: git.Repo, before: dict[str, str], changed: set[str]) -> str:
+    """After a pull, move submodules to the commits the new history records.
+
+    Only submodules that were on the recorded commit before the pull (or that
+    the pull added) are touched: one you moved yourself, or never set up, is
+    left as it is.
+    """
+    from .submodules import list_submodules
+
+    moved, kept = [], []
+    for sub in list_submodules(repo):
+        was = before.get(sub.path)
+        if sub.state == "on another commit" and was == "up to date":
+            moved.append(sub.path)
+        elif sub.state == "not set up" and was is None:
+            moved.append(sub.path)
+        elif sub.state == "on another commit" and was == "on another commit" and sub.path in changed:
+            kept.append(sub.path)
+    text = ""
+    if moved:
+        try:
+            _run(repo.git.submodule, "update", "--init", "--recursive", "--", *moved,
+                 **_network_kwargs(repo))
+        except GitError as e:
+            names = ", ".join(moved)
+            raise GitError(f"The pull worked, but updating the submodules ({names}) failed: {e}",
+                           hint=e.hint or "Try “Set up all” in the Submodules section once the problem "
+                                          "is fixed.") from None
+        text += f" Updated submodule{'s' if len(moved) != 1 else ''} {', '.join(moved)}."
+    if kept:
+        text += (f" Left {', '.join(kept)} on the commit you chose; use “Back to the recorded commit” "
+                 "to update it.")
+    return text
 
 
 def push(repo: git.Repo, force: bool = False) -> str:

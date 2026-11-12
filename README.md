@@ -14,11 +14,11 @@ commit graph, manage branches and stashes — in a clean local web app, with one
 - **Diffs** — for your working files and any commit, opened in place of the graph, with **before/after previews for images**
 - **Commit graph** — all branches with colored lanes, branch/tag labels and your stashes; fast on repositories with tens of thousands of commits
 - **Right-click menus** — checkout, create a branch, cherry-pick, revert, reset (soft / mixed / hard), merge, delete branches (also on the remote)
-- **Sync** — fetch, pull, push, and force push that always uses `--force-with-lease`
+- **Sync** — fetch, pull (which also moves your submodules to the commits the new history records), push, and force push that always uses `--force-with-lease`
 - **Submodules** — see which are out of date or not set up, what changed (commits added or removed), set them up or move them back, and open one in its own tab
 - **Hide branches** — keep the graph focused: hide a branch (or all remote branches) and show it again any time
 - **Tags** — create (lightweight or with a message), push, delete here or on the remote
-- **Stash** — save (with or without untracked files), apply, pop, drop, look inside a stash, and stash the changes inside a submodule
+- **Stash** — save all your changes or only the files you tick (with or without untracked files), apply, pop — onto the current branch, another branch or a new one — drop, look inside a stash, and stash the changes inside a submodule
 - **Merge conflicts** — see the conflicted files, then *abort* or *mark resolved and commit*
 - **Tabs** — several repositories at once; open more with your system's *Choose folder* window, recent repos or the built-in folder browser
 - **Safe by default** — dangerous actions ask first; runs only on your computer (see [Security](#security))

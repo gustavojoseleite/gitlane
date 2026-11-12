@@ -459,8 +459,8 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
     @app.post("/actions/stash/save", response_class=HTMLResponse)
     async def action_stash_save(request: Request) -> HTMLResponse:
         form = await _form(request)
-        return await run_action(stash.save, form.get("message", [""])[0], _untracked(form),
-                                notice=lambda m: m)
+        return await run_action(_save_stash, form.get("message", [""])[0], _untracked(form),
+                                form.get("paths", [""])[0], notice=lambda m: m)
 
     @app.post("/actions/submodule/stash", response_class=HTMLResponse)
     async def action_submodule_stash(request: Request) -> HTMLResponse:
@@ -478,6 +478,18 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
     app.post("/actions/stash/apply", response_class=HTMLResponse)(stash_action(stash.apply))
     app.post("/actions/stash/pop", response_class=HTMLResponse)(stash_action(stash.pop))
     app.post("/actions/stash/drop", response_class=HTMLResponse)(stash_action(stash.drop))
+
+    @app.post("/actions/stash/pop-onto", response_class=HTMLResponse)
+    async def action_stash_pop_onto(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(stash.pop_onto, form.get("index", [""])[0], form.get("sha", [""])[0],
+                                form.get("branch", [""])[0], notice=lambda m: m)
+
+    @app.post("/actions/stash/branch", response_class=HTMLResponse)
+    async def action_stash_branch(request: Request) -> HTMLResponse:
+        form = await _form(request)
+        return await run_action(stash.pop_to_new_branch, form.get("index", [""])[0],
+                                form.get("sha", [""])[0], form.get("name", [""])[0], notice=lambda m: m)
 
     @app.get("/partials/stash", response_class=HTMLResponse)
     def partial_stash(index: int, sha: str) -> str:
@@ -506,6 +518,23 @@ def create_app(repo_path: str | Path | None, token: str, port: int,
 def _untracked(form: dict[str, list[str]]) -> bool:
     """The "Include untracked files" box; on unless it was unticked."""
     return form.get("untracked", ["1"])[0] != "0"
+
+
+def _save_stash(repo, message: str, include_untracked: bool, raw_paths: str) -> str:
+    """Stash; ``raw_paths`` is the Stash dialog's JSON list of ticked files ("" = all)."""
+    return stash.save(repo, message, include_untracked, _stash_paths(raw_paths))
+
+
+def _stash_paths(raw: str) -> list[str] | None:
+    if not raw:
+        return None
+    try:
+        paths = json.loads(raw)
+    except ValueError:
+        raise GitError("Invalid list of files.") from None
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        raise GitError("Invalid list of files.")
+    return paths
 
 
 async def _form(request: Request) -> dict[str, list[str]]:
@@ -565,6 +594,7 @@ _ICONS = {  # 24x24 stroke icons (drawn with currentColor)
            '<circle cx="7.5" cy="7.5" r="1.5"/>',
     "local": '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
     "cloud": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>',
+    "copy": '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
     "cloud-off": '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 9.5z"/>'
                  '<path d="M3 3l18 18"/>',
 }
@@ -836,7 +866,7 @@ def delete_remote_question(name: str) -> str:
 
 def _prompt_button(url: str, field: str, label: str, question: str, css: str = "small",
                    icon: str | None = None, ok: str | None = None, vals: dict | None = None,
-                   check: tuple[str, str] | None = None) -> str:
+                   check: tuple[str, str] | None = None, files: list[dict] | None = None) -> str:
     """A button that asks a question, then POSTs the answer as a form field.
 
     (htmx's hx-prompt sends the answer URL-encoded in a header, which mangles
@@ -844,7 +874,9 @@ def _prompt_button(url: str, field: str, label: str, question: str, css: str = "
 
     ``vals`` are sent along; ``check`` = (form field, label) adds a checkbox (ticked
     at first) whose state is sent as "1" or "0". With css "icon-btn" only the icon
-    shows and the label becomes the tooltip.
+    shows and the label becomes the tooltip. ``files`` = [{"path", "status",
+    "untracked"}] adds a list of files to tick (all ticked at first); when some are
+    unticked, the ticked ones are sent as a JSON list in the "paths" field.
     """
     extra = f' data-prompt-ok="{_attr(ok)}"' if ok else ""
     if "icon-btn" in css.split():
@@ -856,6 +888,8 @@ def _prompt_button(url: str, field: str, label: str, question: str, css: str = "
         extra += f' data-prompt-vals="{_attr(json.dumps(vals))}"'
     if check:
         extra += f' data-prompt-check-field="{_attr(check[0])}" data-prompt-check="{_attr(check[1])}"'
+    if files:
+        extra += f' data-prompt-files="{_attr(json.dumps(files))}"'
     return (f'<button type="button" class="{css}" data-prompt-url="{_attr(url)}" '
             f'data-prompt-field="{_attr(field)}" data-prompt="{_attr(question)}"{extra}>{inner}</button>')
 
@@ -916,10 +950,27 @@ def _sync_toolbar(s: RepoStatus, can_stash: bool = False) -> str:
                     "Changes inside submodules are stashed separately. Message (optional):")
         tools.append(_prompt_button("/actions/stash/save", "message", "Stash changes", question,
                                     css="tb-btn", icon="stash", ok="Stash",
-                                    check=("untracked", "Include untracked files") if s.untracked else None))
+                                    check=("untracked", "Include untracked files") if s.untracked else None,
+                                    files=_stashable_files(s)))
     sep = '<span class="tb-sep" aria-hidden="true"></span>' if tools else ""
     return (f'<div class="sync-bar">{"".join(buttons)}{sep}{"".join(tools)}'
             '<span class="spinner" aria-hidden="true"></span></div>')
+
+
+def _stashable_files(s: RepoStatus) -> list[dict]:
+    """Files the Stash dialog lists (submodules can't be stashed from the project)."""
+    files: dict[str, dict] = {}
+    for c in [*s.staged, *s.unstaged]:
+        if not c.submodule and c.path not in files:
+            files[c.path] = {"path": c.path, "status": c.status, "untracked": False}
+    for c in s.untracked:
+        files.setdefault(c.path, {"path": c.path, "status": "untracked", "untracked": True})
+    return list(files.values())
+
+
+def _copy_button(text: str, label: str) -> str:
+    return (f'<button type="button" class="icon-btn copy-btn" data-copy="{_attr(text)}" '
+            f'title="{_attr(label)}" aria-label="{_attr(label)}">{_icon("copy", 13)}</button>')
 
 
 COLLAPSE_AFTER = 15  # long lists start minimized (the user's own choice wins)
@@ -1290,7 +1341,8 @@ def render_graph_page(page: graph.GraphPage) -> str:
             f'<div class="author" title="{_attr(c.email)}">{_avatar(c.author, c.email)}'
             f'<span>{escape(c.author)}</span></div>'
             f'<div class="date">{c.date}</div>'
-            f'<div class="sha"><code>{c.sha[:7]}</code></div>'
+            f'<div class="sha"><code>{c.sha[:7]}</code>'
+            f'{_copy_button(c.sha, "Copy commit hash") if c.stash is None else ""}</div>'
             "</div>"
         )
     more = ""
@@ -1361,7 +1413,8 @@ def render_commit(d: graph.CommitDetail) -> str:
         f'<dt>Author</dt><dd class="who">{_avatar(c.author, c.email, "lg")}<span>{escape(c.author)} '
         f'<span class="muted">&lt;{escape(c.email)}&gt;</span></span></dd>'
         f'<dt>Date</dt><dd>{c.date}</dd>'
-        f'<dt>Commit</dt><dd><code class="full-sha">{c.sha}</code></dd>'
+        f'<dt>Commit</dt><dd class="sha-dd"><code class="full-sha">{c.sha}</code>'
+        f'{_copy_button(c.sha, "Copy commit hash")}</dd>'
         f'<dt>Parents</dt><dd>{parents}</dd>'
         '</dl>'
         f'<h3>Files changed <span class="count">{len(d.files)}</span></h3>{note}{files_html}'
@@ -1384,6 +1437,12 @@ def render_stash(d) -> str:
     buttons = (
         _post("/actions/stash/apply", vals, label="Apply", css="")
         + _post("/actions/stash/pop", vals, label="Pop (apply and delete)", css="primary")
+        + f'<button type="button" class="" data-stash-pop-onto="{st.index}" data-sha="{st.sha}">'
+          'Pop onto another branch…</button>'
+        + _prompt_button("/actions/stash/branch", "name", "Pop into a new branch…",
+                         f"Pop {st.ref} into a new branch\n\nThe branch starts from the commit the stash "
+                         "was made on, so the changes apply cleanly; the stash is removed. Name:",
+                         css="", ok="Create branch", vals=vals)
         + _post("/actions/stash/drop", vals, label="Drop", css="danger",
                 confirm=f"Delete {st.ref} ({st.title})?\n\nIts changes will be lost.")
     )

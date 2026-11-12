@@ -20,7 +20,7 @@ _F = "\x1f"
 
 # `git stash` uses the ":/" pathspec internally to clean untracked files; our
 # global literal-pathspec setting would turn that into a file named ":/".
-# Stash commands never receive user paths, so it is safe to disable here.
+# Paths chosen by the user are passed with an explicit ":(literal)" prefix.
 _STASH_ENV = {"env": {"GIT_LITERAL_PATHSPECS": "0"}}
 
 
@@ -84,12 +84,15 @@ def _top_stash(repo: git.Repo) -> str | None:
     return out.strip() if code == 0 else None
 
 
-def _push(repo: git.Repo, message: str, include_untracked: bool) -> RepoStatus:
+def _push(repo: git.Repo, message: str, include_untracked: bool,
+          paths: list[str] | None = None) -> RepoStatus:
     """Run ``git stash push``; returns the status from before.
 
     Git never stashes what happens inside a submodule (its files or its new
     commits), and it exits with success when it found nothing to save -- so
     check first, and check afterwards that a stash really was made.
+
+    ``paths`` limits the stash to those files; ``None`` stashes everything.
     """
     status = get_status(repo)
     if status.head_commit is None:
@@ -106,11 +109,17 @@ def _push(repo: git.Repo, message: str, include_untracked: bool) -> RepoStatus:
             raise GitError("There are no changes to stash. Untracked files are kept unless you tick "
                            "“Include untracked files”.")
         raise GitError("There are no changes to stash.")
+    if paths is not None:
+        paths = _stashable(status, paths, include_untracked)
+        untracked = {c.path for c in status.untracked}
+        include_untracked = include_untracked and any(p in untracked for p in paths)
     args = ["push", "-q"]
     if include_untracked:
         args.append("--include-untracked")
     if message:
         args += ["-m", message]
+    if paths is not None:
+        args += ["--", *(f":(literal){p}" for p in paths)]
     before = _top_stash(repo)
     _run(repo.git.stash, *args, **_STASH_ENV)
     if _top_stash(repo) == before:
@@ -118,16 +127,53 @@ def _push(repo: git.Repo, message: str, include_untracked: bool) -> RepoStatus:
     return status
 
 
+def _stashable(status: RepoStatus, paths: list[str], include_untracked: bool) -> list[str]:
+    """Check the chosen files are changes that can be stashed on their own."""
+    if not paths:
+        raise GitError("Choose at least one file to stash.")
+    paths = check_paths(paths)
+    tracked = {c.path: c for c in [*status.staged, *status.unstaged]}
+    untracked = {c.path for c in status.untracked}
+    for p in paths:
+        c = tracked.get(p)
+        if c is not None and c.submodule:
+            raise GitError(f"{p} is a submodule, which Git doesn't stash from here. "
+                           "Use “Stash changes inside” on it instead.")
+        if c is None and p not in untracked:
+            raise GitError(f"{p} has no changes to stash. Refresh and try again.")
+        if c is None and not include_untracked:
+            raise GitError(f"{p} is untracked: tick “Include untracked files” to stash it.")
+    # Git can only stash a file by name while it is in the index, so a staged
+    # deletion -- or the old name of a staged rename -- can't be picked alone.
+    gone = [c for c in status.staged if (c.path in paths and c.status == "deleted")
+            or (c.path in paths and c.orig_path)]
+    if gone:
+        c = gone[0]
+        what = f"{c.orig_path} → {c.path} is a renamed file" if c.orig_path else f"{c.path} is a staged deletion"
+        raise GitError(f"{what}, which Git can't stash on its own.",
+                       hint="Unstage it first, or stash all your changes instead.")
+    return paths
+
+
 def _names(paths: list[str]) -> str:
     return paths[0] if len(paths) == 1 else ", ".join(paths[:-1]) + f" and {paths[-1]}"
 
 
-def save(repo: git.Repo, message: str = "", include_untracked: bool = True) -> str:
-    """Stash all uncommitted changes (and, by default, untracked files)."""
+def save(repo: git.Repo, message: str = "", include_untracked: bool = True,
+         paths: list[str] | None = None) -> str:
+    """Stash uncommitted changes (and, by default, untracked files).
+
+    With ``paths``, only those files are stashed; the rest stay as they are.
+    """
     message = (message or "").strip()
-    _push(repo, message, include_untracked)
-    text = f"Stashed your changes{f' as “{message}”' if message else ''}."
+    _push(repo, message, include_untracked, paths)
+    as_msg = f" as “{message}”" if message else ""
     after = get_status(repo)
+    if paths is not None:
+        what = _names(paths) if len(paths) <= 3 else f"{len(paths)} files"
+        text = f"Stashed {what}{as_msg}."
+        return text + (" Your working tree is clean." if after.clean else " Your other changes are still here.")
+    text = f"Stashed your changes{as_msg}."
     left = [c.path for c in after.unstaged if c.submodule]
     if left:
         text += (f" Changes inside {_names(left)} were not stashed: Git stashes each submodule "
@@ -177,6 +223,49 @@ def pop(repo: git.Repo, index, sha: str) -> str:
                       "and stage them. The stash was kept, so nothing is lost; drop it when you're done.")
         raise
     return f"Applied and removed {s.ref} ({s.title})."
+
+
+def pop_onto(repo: git.Repo, index, sha: str, branch: str) -> str:
+    """Switch to another local branch, then pop the stash there.
+
+    The switch happens first, so if it fails (your changes would be
+    overwritten) nothing moved; if the pop conflicts, the stash is kept.
+    """
+    from .branches import _current_branch_name, _local_names
+
+    s = _find(repo, index, sha)
+    branch = (branch or "").strip()
+    if branch not in _local_names(repo):
+        raise GitError(f"There is no local branch called '{branch}'.")
+    switched = branch != _current_branch_name(repo)
+    if switched:
+        _run(repo.git.switch, "-q", branch)
+    try:
+        pop(repo, s.index, s.sha)
+    except GitError as e:
+        if switched:
+            e.args = (f"Switched to {branch}, but the stash could not be applied: {e}",)
+        raise
+    if not switched:
+        return f"You are already on {branch}: applied and removed {s.ref} ({s.title})."
+    return f"Switched to {branch}, applied {s.ref} ({s.title}) and removed it."
+
+
+def pop_to_new_branch(repo: git.Repo, index, sha: str, name: str) -> str:
+    """``git stash branch``: a new branch from the commit the stash was made on, with the stash popped.
+
+    That commit is where the changes came from, so they always apply cleanly.
+    """
+    from .branches import check_branch_name
+
+    s = _find(repo, index, sha)
+    name = check_branch_name(repo, name)
+    status = get_status(repo)
+    if status.staged or status.unstaged or status.conflicted:
+        raise GitError("Commit or stash your current changes first: Git needs a clean working tree "
+                       "to create a branch from a stash.")
+    _run(repo.git.stash, "branch", name, s.ref, **_STASH_ENV)
+    return f"Created {name} from the commit {s.ref} was made on, applied the stash and removed it."
 
 
 def drop(repo: git.Repo, index, sha: str) -> str:

@@ -454,7 +454,7 @@ kbd.hint {
 /* --- graph ------------------------------------------------------------------------ */
 .graph-head, .row {
   display: grid; align-items: center; column-gap: 10px; padding-right: 12px;
-  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 9.5em calc(16ch + 6px) 4.6em;
+  grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 9.5em calc(16ch + 6px) 6.4em;
 }
 .graph-head {
   position: sticky; top: 0; z-index: 3; height: 30px;
@@ -478,13 +478,19 @@ kbd.hint {
 .row .date { color: var(--muted); }
 .row .sha code { color: var(--muted); font-size: 11.5px; }
 .row.selected .sha code { color: var(--accent); }
+.row .sha { display: flex; align-items: center; gap: 2px; }
+.row .sha .copy-btn { width: 20px; height: 18px; opacity: 0; }
+.row:hover .sha .copy-btn, .row.selected .sha .copy-btn, .row .sha .copy-btn:focus-visible,
+.row .sha .copy-btn.copied { opacity: 1; }
+.copy-btn.copied { color: var(--green); }
+.commit-detail dd.sha-dd { display: flex; align-items: center; gap: 4px; }
 /* Columns react to the graph panel's own width, so they follow the dividers. */
 @container (max-width: 760px) {
-  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) calc(16ch + 6px) 4.6em; }
+  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) calc(16ch + 6px) 6.4em; }
   .row .author, .graph-head .author { display: none; }
 }
 @container (max-width: 520px) {
-  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 4.6em; }
+  .graph-head, .row { grid-template-columns: calc(var(--lanes) * var(--lane-w) + 8px) minmax(0, 1fr) 6.4em; }
   .row .date, .graph-head .date { display: none; }
 }
 .more, .empty-graph { padding: 14px 16px; color: var(--muted); }
@@ -685,6 +691,17 @@ table.diff tr.meta td { color: var(--muted); font-style: italic; }
 .modal-check { display: flex; align-items: center; gap: 8px; margin-left: 46px; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
 .modal-check[hidden] { display: none; }
 .modal .modal-check input { width: auto; flex: none; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); }
+.modal-files { margin: 0 0 0 46px; padding: 0; border: 0; min-width: 0; font-size: 12.5px; color: var(--fg-2); }
+.modal-files[hidden] { display: none; }
+.modal-files legend { padding: 0; margin-bottom: 4px; }
+.modal-files ul {
+  list-style: none; margin: 0; padding: 4px 0; max-height: 220px; overflow: auto;
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg);
+}
+.modal-files label { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; min-width: 0; }
+.modal-files li.off { opacity: .5; }
+.modal-files .path { flex: 1; min-width: 0; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .modal-files input { width: auto; flex: none; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); }
 .modal-extra textarea {
   font: 13px var(--font); color: var(--fg); background: var(--bg); resize: vertical;
   border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px;

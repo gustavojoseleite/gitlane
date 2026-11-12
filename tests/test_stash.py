@@ -213,3 +213,158 @@ def test_only_untracked_files_and_box_unticked(repo):
     with pytest.raises(GitError, match="Include untracked files"):
         stash.save(repo, "", include_untracked=False)
     assert stash.list_stashes(repo) == []
+
+
+# --- stash only some files --------------------------------------------------------
+
+def test_save_chosen_files_keeps_the_rest(repo):
+    (root(repo) / "README.md").write_text("changed\n")
+    (root(repo) / "staged.txt").write_text("staged")
+    run(root(repo), "add", "staged.txt")
+    (root(repo) / "new.txt").write_text("untracked")
+    msg = stash.save(repo, "only readme", paths=["README.md"])
+    assert msg.startswith("Stashed README.md as “only readme”.")
+    assert "other changes are still here" in msg
+    s = get_status(repo)
+    assert [c.path for c in s.staged] == ["staged.txt"]  # still staged
+    assert [c.path for c in s.untracked] == ["new.txt"]
+    assert (root(repo) / "README.md").read_text() == "hello\n"
+    stash.pop(repo, 0, stash.list_stashes(repo)[0].sha)
+    assert (root(repo) / "README.md").read_text() == "changed\n"
+
+
+def test_save_chosen_untracked_file(repo):
+    make_changes(repo)
+    (root(repo) / "other.txt").write_text("stays")
+    stash.save(repo, paths=["new.txt"])
+    assert not (root(repo) / "new.txt").exists()
+    assert (root(repo) / "other.txt").exists()
+    assert (root(repo) / "README.md").read_text() == "changed\n"
+    with pytest.raises(GitError, match="untracked"):
+        stash.save(repo, paths=["other.txt"], include_untracked=False)
+
+
+def test_save_chosen_files_are_literal_paths(repo):
+    """A name like "[a].txt" must not also match "a.txt" as a pattern would."""
+    for name in ("a.txt", "[a].txt"):
+        (root(repo) / name).write_text("v1")
+    run(root(repo), "add", ".")
+    run(root(repo), "commit", "-q", "-m", "two files")
+    for name in ("a.txt", "[a].txt"):
+        (root(repo) / name).write_text("v2")
+    stash.save(repo, paths=["[a].txt"])
+    assert (root(repo) / "[a].txt").read_text() == "v1"
+    assert (root(repo) / "a.txt").read_text() == "v2"
+
+
+def test_save_chosen_staged_rename_or_deletion_is_refused(repo):
+    """Git can't stash those by name; refuse up front instead of half-stashing."""
+    (root(repo) / "b.txt").write_text("b")
+    run(root(repo), "add", "b.txt")
+    run(root(repo), "commit", "-q", "-m", "b")
+    run(root(repo), "mv", "README.md", "READ.md")
+    run(root(repo), "rm", "-q", "b.txt")
+    (root(repo) / "new.txt").write_text("n")
+    with pytest.raises(GitError, match="renamed file") as e:
+        stash.save(repo, paths=["READ.md"])
+    assert "Unstage it first" in e.value.hint
+    with pytest.raises(GitError, match="staged deletion"):
+        stash.save(repo, paths=["b.txt", "new.txt"])
+    assert stash.list_stashes(repo) == []
+    assert (root(repo) / "new.txt").exists()
+
+
+def test_save_chosen_unstaged_deletion(repo):
+    (root(repo) / "README.md").unlink()
+    (root(repo) / "new.txt").write_text("n")
+    stash.save(repo, paths=["README.md"])
+    assert (root(repo) / "README.md").read_text() == "hello\n"
+    assert (root(repo) / "new.txt").exists()
+
+
+def test_save_chosen_files_errors(repo):
+    make_changes(repo)
+    with pytest.raises(GitError, match="at least one"):
+        stash.save(repo, paths=[])
+    with pytest.raises(GitError, match="no changes"):
+        stash.save(repo, paths=["nope.txt"])
+    with pytest.raises(GitError):
+        stash.save(repo, paths=["../outside"])
+    assert stash.list_stashes(repo) == []
+
+
+# --- pop onto another branch --------------------------------------------------------
+
+def test_pop_onto_another_branch(repo):
+    run(root(repo), "branch", "feature")
+    make_changes(repo)
+    stash.save(repo, "for feature")
+    [s] = stash.list_stashes(repo)
+    msg = stash.pop_onto(repo, 0, s.sha, "feature")
+    assert msg == "Switched to feature, applied stash@{0} (for feature) and removed it."
+    assert repo.active_branch.name == "feature"
+    assert (root(repo) / "README.md").read_text() == "changed\n"
+    assert stash.list_stashes(repo) == []
+
+
+def test_pop_onto_current_branch(repo):
+    make_changes(repo)
+    stash.save(repo)
+    [s] = stash.list_stashes(repo)
+    assert "already on main" in stash.pop_onto(repo, 0, s.sha, "main")
+    assert stash.list_stashes(repo) == []
+
+
+def test_pop_onto_checks_branch_and_stash(repo):
+    make_changes(repo)
+    stash.save(repo)
+    [s] = stash.list_stashes(repo)
+    with pytest.raises(GitError, match="no local branch"):
+        stash.pop_onto(repo, 0, s.sha, "nope")
+    with pytest.raises(GitError, match="changed"):
+        stash.pop_onto(repo, 0, "0" * 40, "main")
+    assert len(stash.list_stashes(repo)) == 1
+
+
+def test_pop_onto_stops_before_switching_over_your_changes(repo):
+    run(root(repo), "checkout", "-q", "-b", "feature")
+    (root(repo) / "README.md").write_text("feature\n")
+    run(root(repo), "commit", "-q", "-am", "feature readme")
+    run(root(repo), "checkout", "-q", "main")
+    (root(repo) / "x.txt").write_text("stash me")
+    stash.save(repo)
+    (root(repo) / "README.md").write_text("mine, not committed\n")
+    [s] = stash.list_stashes(repo)
+    with pytest.raises(GitError):
+        stash.pop_onto(repo, 0, s.sha, "feature")
+    assert repo.active_branch.name == "main"
+    assert (root(repo) / "README.md").read_text() == "mine, not committed\n"
+    assert len(stash.list_stashes(repo)) == 1
+
+
+def test_pop_into_new_branch(repo):
+    (root(repo) / "README.md").write_text("from stash\n")
+    stash.save(repo, "idea")
+    # main moves on with a conflicting change: a plain pop would conflict
+    (root(repo) / "README.md").write_text("main moved\n")
+    run(root(repo), "commit", "-q", "-am", "main moved")
+    base = run(root(repo), "rev-parse", "HEAD~1")
+    [s] = stash.list_stashes(repo)
+    msg = stash.pop_to_new_branch(repo, 0, s.sha, "idea-branch")
+    assert "Created idea-branch" in msg
+    assert repo.active_branch.name == "idea-branch"
+    assert run(root(repo), "rev-parse", "HEAD") == base
+    assert (root(repo) / "README.md").read_text() == "from stash\n"
+    assert stash.list_stashes(repo) == []
+
+
+def test_pop_into_new_branch_needs_clean_tree_and_good_name(repo):
+    make_changes(repo)
+    stash.save(repo)
+    [s] = stash.list_stashes(repo)
+    with pytest.raises(GitError, match="not a valid branch name"):
+        stash.pop_to_new_branch(repo, 0, s.sha, "bad name")
+    (root(repo) / "README.md").write_text("dirty\n")
+    with pytest.raises(GitError, match="clean working tree"):
+        stash.pop_to_new_branch(repo, 0, s.sha, "ok")
+    assert len(stash.list_stashes(repo)) == 1

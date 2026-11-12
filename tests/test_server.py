@@ -508,7 +508,8 @@ def test_index_has_context_menu(client):
 
 # --- milestone 6: stash ---------------------------------------------------------
 
-STASH_ACTIONS = ["/actions/stash/save", "/actions/stash/apply", "/actions/stash/pop", "/actions/stash/drop"]
+STASH_ACTIONS = ["/actions/stash/save", "/actions/stash/apply", "/actions/stash/pop", "/actions/stash/drop",
+                 "/actions/stash/pop-onto", "/actions/stash/branch"]
 
 
 @pytest.mark.parametrize("path", STASH_ACTIONS)
@@ -552,6 +553,72 @@ def test_stash_drop_has_confirm(client, repo_path):
     client.post("/actions/stash/save", data={"message": "x"})
     html = client.get("/partials/status").text
     assert "/actions/stash/drop" in html and "Its changes will be lost" in html
+
+
+def test_stash_dialog_lists_files_and_saves_chosen_ones(client, repo_path):
+    import json
+
+    from gitlane import server
+    from gitlane.git_ops import get_status, open_repo
+    (repo_path / "novo.txt").write_text("untracked")
+    html = client.get("/partials/status").text
+    assert "data-prompt-files=" in html
+    repo = open_repo(repo_path)
+    try:
+        files = server._stashable_files(get_status(repo))
+    finally:
+        repo.close()
+    by_path = {f["path"]: f for f in files}
+    assert by_path["README.md"]["untracked"] is False and by_path["novo.txt"]["untracked"] is True
+    r = client.post("/actions/stash/save", data={"message": "", "paths": json.dumps(["novo.txt"])})
+    assert "Stashed novo.txt." in r.text
+    assert not (repo_path / "novo.txt").exists()
+    assert (repo_path / "README.md").read_text().startswith("changed")
+
+
+@pytest.mark.parametrize("paths", ["not json", '{"a": 1}', "[1, 2]"])
+def test_stash_paths_must_be_a_list_of_names(client, paths):
+    r = client.post("/actions/stash/save", data={"paths": paths})
+    assert "Invalid list of files" in r.text
+
+
+def test_stash_pop_onto_and_new_branch_through_server(client, repo_path):
+    from gitlane import stash as stash_mod
+    from gitlane.git_ops import open_repo
+
+    from .conftest import run
+    run(repo_path, "branch", "feature")
+    client.post("/actions/stash/save", data={"message": "one"})
+
+    def top():
+        repo = open_repo(repo_path)
+        try:
+            return stash_mod.list_stashes(repo)[0]
+        finally:
+            repo.close()
+
+    st = top()
+    detail = client.get(f"/partials/stash?index=0&sha={st.sha}").text
+    assert "Pop onto another branch…" in detail and "Pop into a new branch…" in detail
+    assert 'data-prompt-url="/actions/stash/branch"' in detail
+    r = client.post("/actions/stash/pop-onto", data={"index": "0", "sha": st.sha, "branch": "feature"})
+    assert "Switched to feature, applied stash@{0} (one)" in r.text
+    assert run(repo_path, "branch", "--show-current") == "feature"
+
+    client.post("/actions/stash/save", data={"message": "two"})
+    st = top()
+    r = client.post("/actions/stash/branch", data={"index": "0", "sha": st.sha, "name": "from-two"})
+    assert "Created from-two" in r.text
+    assert run(repo_path, "branch", "--show-current") == "from-two"
+
+
+def test_copy_hash_buttons(client, repo_path):
+    from .conftest import run
+    sha = run(repo_path, "rev-parse", "HEAD")
+    detail = client.get(f"/partials/commit?sha={sha}").text
+    assert f'data-copy="{sha}"' in detail and "Copy commit hash" in detail
+    graph = client.get("/partials/graph").text
+    assert f'data-copy="{sha}"' in graph
 
 
 def test_stale_stash_detail(client):

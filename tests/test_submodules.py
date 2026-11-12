@@ -190,3 +190,117 @@ def test_stash_inside_unknown_or_missing_submodule(repo, project, tmp_path):
             stash.save_in_submodule(r, "vendor/lib")
     finally:
         r.close()
+
+
+# --- pull updates submodules ------------------------------------------------------------
+
+class Team:
+    """``project`` pushed to a bare remote, and a clone of it (with the submodule set up)."""
+
+    def __init__(self, tmp_path: Path, project: Path):
+        self.project = project
+        self.lib = tmp_path / "lib"
+        self.remote = tmp_path / "app.git"
+        run(tmp_path, "init", "-q", "--bare", str(self.remote))
+        run(project, "remote", "add", "origin", str(self.remote))
+        run(project, "push", "-q", "-u", "origin", "main")
+        self.clone = tmp_path / "clone"
+        run(tmp_path, "clone", "-q", "--recurse-submodules", str(self.remote), str(self.clone))
+        self.repo = open_repo(self.clone)
+
+    def push_new_lib_commit(self, msg: str = "lib 3") -> str:
+        """A teammate moves vendor/lib to a new commit and pushes the project."""
+        run(self.lib, "commit", "-q", "--allow-empty", "-m", msg)
+        inner = self.project / "vendor" / "lib"
+        run(inner, "pull", "-q", "origin", "HEAD")
+        sha = run(inner, "rev-parse", "HEAD")
+        run(self.project, "commit", "-q", "-am", f"lib to {msg}")
+        run(self.project, "push", "-q")
+        return sha
+
+    def lib_head(self) -> str:
+        return run(self.clone / "vendor" / "lib", "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def team(tmp_path, project):
+    t = Team(tmp_path, project)
+    yield t
+    t.repo.close()
+
+
+def test_pull_moves_submodule_to_new_recorded_commit(team):
+    from gitlane.git_ops import pull
+
+    sha = team.push_new_lib_commit()
+    msg = pull(team.repo)
+    assert "Pulled 1 new commit" in msg and "Updated submodule vendor/lib." in msg
+    assert team.lib_head() == sha
+    [sm] = submodules.list_submodules(team.repo)
+    assert sm.state == "up to date"
+    assert get_status(team.repo).clean
+
+
+def test_pull_leaves_a_submodule_you_moved(team):
+    from gitlane.git_ops import pull
+
+    inner = team.clone / "vendor" / "lib"
+    run(inner, "checkout", "-q", "HEAD~1")  # your own choice
+    mine = team.lib_head()
+    team.push_new_lib_commit()
+    msg = pull(team.repo)
+    assert "Left vendor/lib on the commit you chose" in msg
+    assert team.lib_head() == mine
+
+
+def test_pull_without_submodule_changes_says_nothing_about_them(team):
+    from gitlane.git_ops import pull
+
+    (team.project / "notes.txt").write_text("n")
+    run(team.project, "add", "notes.txt")
+    run(team.project, "commit", "-q", "-m", "notes")
+    run(team.project, "push", "-q")
+    msg = pull(team.repo)
+    assert msg.startswith("Pulled 1 new commit") and "submodule" not in msg
+
+
+def test_pull_sets_up_a_new_submodule(team, tmp_path):
+    from gitlane.git_ops import pull
+
+    other = tmp_path / "other"
+    other.mkdir()
+    run(other, "init", "-q")
+    run(other, "commit", "-q", "--allow-empty", "-m", "other 1")
+    run(team.project, "submodule", "add", "-q", str(other), "vendor/other")
+    run(team.project, "commit", "-q", "-m", "add other")
+    run(team.project, "push", "-q")
+    msg = pull(team.repo)
+    assert "Updated submodule vendor/other." in msg
+    states = {s.path: s.state for s in submodules.list_submodules(team.repo)}
+    assert states == {"vendor/lib": "up to date", "vendor/other": "up to date"}
+
+
+def test_pull_keeps_a_submodule_you_never_set_up(team, tmp_path):
+    from gitlane.git_ops import pull
+
+    run(team.clone, "submodule", "deinit", "-q", "vendor/lib")
+    team.push_new_lib_commit()
+    msg = pull(team.repo)
+    assert "Updated" not in msg
+    [sm] = submodules.list_submodules(team.repo)
+    assert sm.state == "not set up"
+
+
+def test_pull_reports_a_failed_submodule_update(team):
+    from gitlane.git_ops import pull
+
+    (team.lib / "f.txt").write_text("from lib")
+    run(team.lib, "add", "f.txt")
+    team.push_new_lib_commit()
+    # an untracked file inside the submodule that the new commit would overwrite
+    (team.clone / "vendor" / "lib" / "f.txt").write_text("mine")
+    with pytest.raises(GitError, match="The pull worked, but updating the submodules") as e:
+        pull(team.repo)
+    assert run(team.clone, "log", "-1", "--format=%s") == "lib to lib 3"
+    assert (team.clone / "vendor" / "lib" / "f.txt").read_text() == "mine"  # never thrown away
+    assert e.value.hint

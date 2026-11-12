@@ -373,11 +373,86 @@ def test_stash_in_graph_click_and_menu(make_repo, open_page):
     page.wait_for_selector("#detail .stash-detail:has-text('from the graph')")
     page.locator("#graph .row.stash-row").click(button="right")
     labels = page.locator("#ctx-menu button").all_inner_texts()
-    assert labels == ["Apply (keep the stash)", "Pop (apply and delete)", "Drop stash@{0}…"]
-    page.click("#ctx-menu button:has-text('Pop')")
+    assert labels == ["Apply (keep the stash)", "Pop (apply and delete)", "Pop onto another branch…",
+                      "Pop into a new branch…", "Drop stash@{0}…"]
+    page.click("#ctx-menu button:has-text('Pop (apply and delete)')")
     page.wait_for_selector("#status .banner.notice:has-text('Applied and removed')")
     page.wait_for_selector("#graph .row.stash-row", state="detached")
     assert (path / "README.md").read_text() == "wip\n"
+
+
+def test_stash_only_the_ticked_files(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("wip\n")
+    (path / "keep.txt").write_text("stays")
+    (path / "go.txt").write_text("goes")
+    page = open_page(path)
+    page.click("#toolbar button:has-text('Stash changes')")
+    page.wait_for_selector("#modal[open] #modal-files:not([hidden])")
+    names = page.locator("#modal-files-list .path").all_inner_texts()
+    assert sorted(names) == ["README.md", "go.txt", "keep.txt"]
+    page.uncheck("#modal-files-list input[value='keep.txt']")
+    page.uncheck("#modal-files-list input[value='README.md']")
+    assert page.evaluate("document.getElementById('modal-files-all').indeterminate")
+    answer_modal(page, "some files")
+    page.wait_for_selector("#status .banner.notice:has-text('Stashed go.txt')")
+    assert not (path / "go.txt").exists()
+    assert (path / "keep.txt").exists() and (path / "README.md").read_text() == "wip\n"
+
+
+def test_stash_dialog_needs_a_ticked_file_and_untracked_box_disables_new_files(make_repo, open_page):
+    path = make_repo()
+    (path / "README.md").write_text("wip\n")
+    (path / "new.txt").write_text("n")
+    page = open_page(path)
+    page.click("#toolbar button:has-text('Stash changes')")
+    page.wait_for_selector("#modal[open] #modal-files:not([hidden])")
+    page.uncheck("#modal-check-input")  # Include untracked files
+    assert page.is_disabled("#modal-files-list input[value='new.txt']")
+    page.uncheck("#modal-files-all")
+    page.click("#modal-ok")
+    page.wait_for_selector("#modal-error:has-text('Tick at least one file')")
+    assert page.is_visible("#modal[open]")
+    page.check("#modal-files-list input[value='README.md']")
+    page.click("#modal-ok")  # every usable file ticked: a normal stash that keeps new files
+    page.wait_for_selector("#status .banner.notice:has-text('Untracked files were kept')")
+    assert (path / "new.txt").exists()
+
+
+def test_pop_stash_onto_another_branch(make_repo, open_page):
+    path = make_repo()
+    run(path, "branch", "feature")
+    (path / "README.md").write_text("for feature\n")
+    page = open_page(path)
+    page.click("#toolbar button:has-text('Stash changes')")
+    answer_modal(page, "move me")
+    page.wait_for_selector("#graph .row.stash-row").click()
+    page.click("#detail button:has-text('Pop onto another branch…')")
+    page.wait_for_selector("#modal[open]")
+    assert page.input_value("#modal-input") == "feature"  # the other branch is offered
+    assert page.locator("#modal-choices option").evaluate_all("os => os.map(o => o.value)") == ["feature"]
+    answer_modal(page)
+    page.wait_for_selector("#status .banner.notice:has-text('Switched to feature')")
+    assert run(path, "branch", "--show-current") == "feature"
+    assert (path / "README.md").read_text() == "for feature\n"
+    assert run(path, "stash", "list") == ""
+
+
+def test_copy_commit_hash(make_repo, open_page):
+    path = make_repo()
+    sha = run(path, "rev-parse", "HEAD")
+    page = open_page(path)
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    row = page.locator("#graph .row").first
+    row.hover()
+    row.locator(".copy-btn").click()  # copies without opening anything else
+    assert page.evaluate("navigator.clipboard.readText()") == sha
+    page.evaluate("navigator.clipboard.writeText('')")
+    row.click()
+    btn = page.wait_for_selector("#detail .commit-detail .copy-btn")
+    btn.click()
+    assert page.evaluate("navigator.clipboard.readText()") == sha
+    assert btn.get_attribute("title") == "Copied!"
 
 
 def test_file_names_get_the_row_width(make_repo, open_page):

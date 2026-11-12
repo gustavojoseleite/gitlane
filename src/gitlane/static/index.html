@@ -182,10 +182,16 @@ SOFTWARE.</pre>
       </div>
       <p id="modal-text"></p>
       <input id="modal-input" type="text" autocomplete="off" spellcheck="false" hidden>
+      <datalist id="modal-choices"></datalist>
       <label id="modal-extra" class="modal-extra" hidden><span id="modal-extra-label"></span>
         <textarea id="modal-extra-input" rows="3" spellcheck="true"></textarea></label>
       <label id="modal-check" class="modal-check" hidden><input id="modal-check-input" type="checkbox">
         <span id="modal-check-label"></span></label>
+      <fieldset id="modal-files" class="modal-files" hidden>
+        <legend><label class="modal-files-all"><input id="modal-files-all" type="checkbox">
+          <span>Files to stash</span></label></legend>
+        <ul id="modal-files-list"></ul>
+      </fieldset>
       <p id="modal-error" class="modal-error" role="alert" hidden></p>
       <div class="modal-actions">
         <button type="submit" value="ok" id="modal-ok" class="primary">OK</button>
@@ -592,6 +598,10 @@ SOFTWARE.</pre>
       const modalCheck = document.getElementById("modal-check");
       const modalCheckLabel = document.getElementById("modal-check-label");
       const modalCheckInput = document.getElementById("modal-check-input");
+      const modalFiles = document.getElementById("modal-files");
+      const modalFilesList = document.getElementById("modal-files-list");
+      const modalFilesAll = document.getElementById("modal-files-all");
+      const modalChoices = document.getElementById("modal-choices");
       const modalOk = document.getElementById("modal-ok");
       const modalCancel = document.getElementById("modal-cancel");
 
@@ -607,8 +617,37 @@ SOFTWARE.</pre>
       // the text/null. With extra (a label), a second, multi-line field is shown and the answer is
       // [text, extraText] or null. With check (a label), a ticked checkbox is shown; read its state
       // from modalCheckInput.checked after the answer.
+      // The file checkboxes of the Stash dialog: untracked ones only count while
+      // "Include untracked files" is ticked.
+      const fileBoxes = () => [...modalFilesList.querySelectorAll("input[type=checkbox]")];
+      const syncFileBoxes = () => {
+        const withUntracked = modalCheck.hidden || modalCheckInput.checked;
+        for (const box of fileBoxes()) {
+          if (box.dataset.untracked) box.disabled = !withUntracked;
+          box.closest("li").classList.toggle("off", box.disabled);
+        }
+        const usable = fileBoxes().filter((b) => !b.disabled);
+        const on = usable.filter((b) => b.checked).length;
+        modalFilesAll.checked = on === usable.length && on > 0;
+        modalFilesAll.indeterminate = on > 0 && on < usable.length;
+      };
+      modalFilesList.addEventListener("change", syncFileBoxes);
+      modalCheckInput.addEventListener("change", syncFileBoxes);
+      modalFilesAll.addEventListener("change", () => {
+        for (const box of fileBoxes()) if (!box.disabled) box.checked = modalFilesAll.checked;
+        syncFileBoxes();
+      });
+      // null = every file (a normal stash), otherwise the ticked paths.
+      const chosenFiles = () => {
+        if (modalFiles.hidden) return null;
+        const boxes = fileBoxes();
+        const usable = boxes.filter((b) => !b.disabled);
+        const ticked = usable.filter((b) => b.checked).map((b) => b.value);
+        return ticked.length === usable.length && boxes.every((b) => b.checked) ? null : ticked;
+      };
+
       const ask = ({ question, danger = false, input = false, value = "", required = false, ok, extra,
-                     check }) =>
+                     check, files, choices }) =>
         new Promise((resolve) => {
           const [title, ...rest] = question.split(/\n\s*\n/);
           modalTitle.textContent = title.trim();
@@ -625,6 +664,31 @@ SOFTWARE.</pre>
           modalCheck.hidden = !check;
           modalCheckLabel.textContent = check || "";
           modalCheckInput.checked = true;
+          modalFilesList.replaceChildren();
+          modalFiles.hidden = !(files && files.length > 1);
+          for (const f of (modalFiles.hidden ? [] : files)) {
+            const li = document.createElement("li");
+            const label = document.createElement("label");
+            const box = document.createElement("input");
+            box.type = "checkbox";
+            box.checked = true;
+            box.value = f.path;
+            if (f.untracked) box.dataset.untracked = "1";
+            const name = document.createElement("span");
+            name.className = "path";
+            name.textContent = f.path;
+            name.title = f.path;
+            const status = document.createElement("span");
+            status.className = "muted";
+            status.textContent = f.status;
+            label.append(box, name, status);
+            li.append(label);
+            modalFilesList.append(li);
+          }
+          syncFileBoxes();
+          modalChoices.replaceChildren(...(choices || []).map((c) => new Option(c)));
+          if (choices) modalInput.setAttribute("list", "modal-choices");
+          else modalInput.removeAttribute("list");
           modalError.hidden = true;
           modal.returnValue = "";
           const done = () => {
@@ -648,6 +712,10 @@ SOFTWARE.</pre>
           modalError.textContent = "This can't be empty.";
           modalError.hidden = false;
           modalInput.focus();
+        } else if (e.submitter?.value === "ok" && !modalFiles.hidden && chosenFiles()?.length === 0) {
+          e.preventDefault();
+          modalError.textContent = "Tick at least one file to stash.";
+          modalError.hidden = false;
         }
       });
       modal.addEventListener("click", (e) => { if (e.target === modal) modal.close("cancel"); });  // backdrop
@@ -682,10 +750,13 @@ SOFTWARE.</pre>
         const checkField = b.dataset.promptCheckField;
         ask({ question: b.dataset.prompt, input: true, value: b.dataset.promptDefault || "", required,
               ok: b.dataset.promptOk || b.textContent.trim(),
-              check: checkField ? b.dataset.promptCheck : undefined }).then((answer) => {
+              check: checkField ? b.dataset.promptCheck : undefined,
+              files: b.dataset.promptFiles ? JSON.parse(b.dataset.promptFiles) : undefined }).then((answer) => {
           if (answer === null) return;
           const values = { ...JSON.parse(b.dataset.promptVals || "{}"), [b.dataset.promptField]: answer };
           if (checkField) values[checkField] = modalCheckInput.checked ? "1" : "0";
+          const paths = b.dataset.promptFiles ? chosenFiles() : null;
+          if (paths) values.paths = JSON.stringify(paths);
           post(b.dataset.promptUrl, values);
         });
       });
@@ -751,9 +822,62 @@ SOFTWARE.</pre>
               `HARD reset ${branch || "HEAD"} to ${short}?\n\nAll uncommitted changes AND the ` +
               "commits after it will be thrown away. This cannot be undone from gitlane.", true) },
           "-",
-          { label: "Copy commit hash", run: () => navigator.clipboard?.writeText(sha) },
+          { label: "Copy commit hash", run: () => copyText(sha) },
         ];
       };
+
+      // Local branches, from the sidebar (the current one first).
+      const localBranches = () => [...document.querySelectorAll(
+        '#status [data-ref-kind="head"], #status [data-ref-kind="branch"]')].map((li) => li.dataset.refName);
+
+      const popOnto = async (index, sha) => {
+        const ref = `stash@{${index}}`;
+        const others = localBranches().filter((b) => b !== currentBranch());
+        const branch = await ask({
+          question: `Pop ${ref} onto another branch\n\ngitlane switches to that branch, applies the stash ` +
+                    "and removes it. If your current changes would be overwritten, nothing happens. Branch:",
+          input: true, required: true, value: others[0] || "", ok: "Switch and pop", choices: others });
+        if (branch) post("/actions/stash/pop-onto", { index, sha, branch: branch.trim() });
+      };
+      const popToNewBranch = async (index, sha) => {
+        const ref = `stash@{${index}}`;
+        const name = await ask({
+          question: `Pop ${ref} into a new branch\n\nThe branch starts from the commit the stash was made ` +
+                    "on, so the changes apply cleanly; the stash is removed. Name:",
+          input: true, required: true, ok: "Create branch" });
+        if (name) post("/actions/stash/branch", { index, sha, name });
+      };
+      document.body.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-stash-pop-onto]");
+        if (b) popOnto(b.dataset.stashPopOnto, b.dataset.sha);
+      });
+
+      // Copy buttons (commit hash): no click-through to the row underneath.
+      const copyText = async (text) => {
+        try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back below */ }
+        const t = document.createElement("textarea");
+        t.value = text;
+        t.style.position = "fixed";
+        t.style.opacity = "0";
+        document.body.append(t);
+        t.select();
+        const ok = document.execCommand("copy");
+        t.remove();
+        return ok;
+      };
+      document.addEventListener("click", async (e) => {
+        const b = e.target.closest("[data-copy]");
+        if (!b) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const ok = await copyText(b.dataset.copy);
+        const title = b.dataset.title || b.title;
+        b.dataset.title = title;
+        b.classList.toggle("copied", ok);
+        b.title = ok ? "Copied!" : "Couldn't copy";
+        clearTimeout(b._copyTimer);
+        b._copyTimer = setTimeout(() => { b.classList.remove("copied"); b.title = title; }, 1500);
+      }, true);
 
       const stashItems = (index, sha) => {
         const vals = { index, sha };
@@ -761,6 +885,8 @@ SOFTWARE.</pre>
         return [
           { label: "Apply (keep the stash)", run: () => post("/actions/stash/apply", vals) },
           { label: "Pop (apply and delete)", run: () => post("/actions/stash/pop", vals) },
+          { label: "Pop onto another branch…", run: () => popOnto(index, sha) },
+          { label: "Pop into a new branch…", run: () => popToNewBranch(index, sha) },
           "-",
           { label: `Drop ${ref}…`, danger: true,
             run: () => post("/actions/stash/drop", vals, `Delete ${ref}?\n\nIts changes will be lost.`, true) },
@@ -819,7 +945,7 @@ SOFTWARE.</pre>
             ...(sha ? [{ label: `Checkout tag ${name}`, run: () => post("/actions/commit/checkout", { sha },
                 `Check out tag ${name}?\n\nYou will be in "detached HEAD".`) }, "-"] : []),
             { label: `Push tag ${name} to the remote`, run: () => post("/actions/tag/push", { name }) },
-            { label: "Copy tag name", run: () => navigator.clipboard?.writeText(name) },
+            { label: "Copy tag name", run: () => copyText(name) },
             "-",
             { label: `Delete tag ${name}…`, danger: true,
               run: () => post("/actions/tag/delete", { name },
