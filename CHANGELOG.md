@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-11-11
+
+- **Pull updates submodules:** when the commits you pull move a submodule, gitlane moves it to the
+  new recorded commit (and sets up submodules the pull added). A submodule you moved yourself, or
+  never set up, is left as it is and the message says so. If the update fails, the pull is kept and
+  the message says what went wrong
+- **Stash only some files:** the Stash dialog lists your changed files; untick the ones to keep.
+  A staged rename or deletion can't be stashed on its own (Git doesn't allow it), and gitlane says so
+  before doing anything
+- **Pop a stash onto another branch:** *Pop onto another branch…* switches to the branch you pick
+  and pops the stash there (nothing happens if the switch would overwrite your changes);
+  *Pop into a new branch…* creates a branch from the commit the stash was made on, so the changes
+  always apply cleanly. Both are in the stash's details and in its right-click menu
+- **Copy a commit hash in one click:** a copy button next to the hash in the commit's details, and
+  on each row of the graph when you hover it
+
 ## 0.4.0 — 2026-11-08
 
 - **No more stuck page:** a slow pull, push or other action no longer freezes gitlane; the rest of
